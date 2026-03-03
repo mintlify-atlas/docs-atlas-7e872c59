@@ -42,7 +42,7 @@ if (position_direction opposite to oi_delta) {
 ```
 
 **Example:**
-```
+```text
 Current state: Long OI = $1M, Short OI = $500K
 OI Delta = $500K (more longs than shorts)
 
@@ -95,7 +95,7 @@ total_fee = vault_fee + protocol_fee
 - Vault rate: 70%
 
 **Calculation:**
-```
+```text
 Maker fee: $3,000 * 0.0003 = $0.90
 Taker fee: $7,000 * 0.0008 = $5.60
 Base fee: $0.90 + $5.60 = $6.50
@@ -174,7 +174,7 @@ target_rate = target_ratio * max_funding_fee_rate_per_second
 <Accordion title="Hill Function Visualization">
 The Hill function creates a smooth S-curve:
 
-```
+```text
 Funding Rate (%/year)
      |
 100% |                    ___________
@@ -270,7 +270,7 @@ funding_fee = fee_per_oi_delta * position.size + position.last_calculated_fee
 - Held for 7 days = 604,800 seconds
 
 **Fee Calculation:**
-```
+```text
 Avg rate over 7 days: 45% APR = 0.0000014256/s
 Acc rate: 0.0000014256 * 604,800 = 0.8623
 Fee per OI: 0.8623 * $30,000 (price) = $25,869 per $1M OI
@@ -337,7 +337,7 @@ update_rollover_fee_per_second(
 ```
 
 **Validation:**
-```
+```move
 assert!(pure_long_rate + broker_premium <= max_rollover_rate)
 ```
 
@@ -373,7 +373,7 @@ rollover_fee = fee_per_oi_delta * position.size + position.last_calculated_fee
 - Is negative allowed: false
 
 **Long Position:**
-```
+```text
 Rate = 3% + 2% = 5% APR  
 Size: $100,000
 Duration: 30 days = 2,592,000 seconds
@@ -387,7 +387,7 @@ Your fee: ($100,000 / $1M) * $1,233 = $123.30
 ```
 
 **Short Position:**
-```  
+```text
 Rate = 2% - 3% = -1% (capped at 0% if negatives not allowed)
 Fee = $0
 ```
