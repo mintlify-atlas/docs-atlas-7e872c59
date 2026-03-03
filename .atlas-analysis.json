@@ -1,0 +1,125 @@
+{
+  "projectType": "infrastructure",
+  "projectName": "Strat Perpetual DEX",
+  "projectDescription": "A modular smart contract system for a decentralized perpetual exchange on the Initia blockchain",
+  "theme": "aspen",
+  "primaryColor": "#3B82F6",
+  "lightColor": "#60A5FA",
+  "darkColor": "#2563EB",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "architecture"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/trading",
+              "concepts/positions",
+              "concepts/liquidity",
+              "concepts/fees"
+            ]
+          },
+          {
+            "group": "Deployment",
+            "pages": [
+              "deployment/setup",
+              "deployment/configuration",
+              "deployment/testing"
+            ]
+          },
+          {
+            "group": "Integration",
+            "pages": [
+              "integration/traders",
+              "integration/keepers",
+              "integration/liquidity-providers"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Smart Contracts",
+        "groups": [
+          {
+            "group": "Core Modules",
+            "pages": [
+              "contracts/gov",
+              "contracts/order",
+              "contracts/position",
+              "contracts/order-executor"
+            ]
+          },
+          {
+            "group": "Market Infrastructure",
+            "pages": [
+              "contracts/pair",
+              "contracts/vault",
+              "contracts/oracle-aggregator"
+            ]
+          },
+          {
+            "group": "Support Modules",
+            "pages": [
+              "contracts/referral",
+              "contracts/vip-score",
+              "contracts/pre-deposit",
+              "contracts/signed-bigdecimal",
+              "contracts/utils"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Decentralized perpetual futures trading with leverage up to configurable limits",
+    "Modular smart contract architecture with separate governance, order execution, and position management",
+    "Liquidity provider vault system with LP tokens and fee collection mechanisms",
+    "Oracle aggregation from multiple sources (Stork) with market status monitoring",
+    "Order executor system for keepers to trigger and settle trades",
+    "Referral program with volume-based code generation",
+    "VIP scoring system for trader benefits and fee discounts",
+    "Dynamic spread and funding fee mechanisms based on open interest",
+    "Take profit, stop loss, and automated liquidation support",
+    "Pre-deposit points system for early users"
+  ],
+  "publicApiSurface": [
+    "order::create_open_order",
+    "order::cancel_open_order",
+    "order::update_tp_sl",
+    "order::add_collateral_to_position",
+    "order::remove_collateral_from_position",
+    "order::create_close_order",
+    "order::close_position",
+    "order_executor::execute_open_order",
+    "order_executor::execute_close_order",
+    "order_executor::execute_automation_close",
+    "vault::provide_collateral",
+    "vault::request_withdraw",
+    "vault::withdraw",
+    "vault::provide_liquidity_buffer",
+    "vault::withdraw_liquidity_buffer",
+    "gov::update_order_config",
+    "gov::register_pair",
+    "gov::update_pair_config",
+    "gov::update_vault_config",
+    "gov::update_oracle_config",
+    "oracle_aggregator::get_price",
+    "oracle_aggregator::get_market_status",
+    "position::get_position",
+    "position::calculate_pnl",
+    "pair::get_pair_info",
+    "referral::generate_code",
+    "referral::register_referral_code",
+    "vip_score::update_score"
+  ]
+}
