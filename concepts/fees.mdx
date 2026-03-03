@@ -1,0 +1,538 @@
+---
+title: "Fees"
+description: "Comprehensive guide to Strat's fee structure including opening fees, funding fees, and rollover fees"
+---
+
+## Overview
+
+Strat implements a dynamic fee system with three primary components: opening fees, funding fees, and rollover fees. These fees maintain market balance, compensate liquidity providers, and cover protocol costs.
+
+## Opening Fees
+
+One-time fees charged when opening a position.
+
+### Fee Structure
+
+Opening fees use a maker-taker model:
+
+```move
+struct PairInfo {
+    maker_fee_rate: BigDecimal,   // Fee for reducing OI imbalance
+    taker_fee_rate: BigDecimal,   // Fee for increasing OI imbalance  
+    vault_fee_rate: BigDecimal,   // Portion going to vault
+}
+```
+
+### Maker vs Taker Classification
+
+The protocol determines maker/taker based on open interest (OI) impact:
+
+```move
+oi_delta = long_oi - short_oi  // Current market imbalance
+
+// If your position reduces the imbalance → Maker
+if (position_direction opposite to oi_delta) {
+    maker_portion = min(position_size, abs(oi_delta))
+    taker_portion = position_size - maker_portion
+} else {
+    // Position increases imbalance → Taker
+    maker_portion = 0
+    taker_portion = position_size
+}
+```
+
+**Example:**
+```
+Current state: Long OI = $1M, Short OI = $500K
+OI Delta = $500K (more longs than shorts)
+
+Scenario 1: Open $300K short
+→ Reduces imbalance by $300K
+→ 100% Maker fee (lower)
+
+Scenario 2: Open $300K long  
+→ Increases imbalance by $300K
+→ 100% Taker fee (higher)
+
+Scenario 3: Open $700K short
+→ First $500K reduces imbalance (Maker)
+→ Next $200K flips imbalance (Taker)
+→ Mixed fee: (500K * maker_rate + 200K * taker_rate) / 700K
+```
+
+<Info>
+Check current OI delta before opening large positions. Trading against the imbalance can save significantly on fees.
+</Info>
+
+### Fee Calculation
+
+```move
+base_fee = maker_fee_rate * maker_amount + taker_fee_rate * taker_amount
+vault_fee = base_fee * vault_fee_rate
+protocol_fee = base_fee * (1 - vault_fee_rate)
+
+total_fee = vault_fee + protocol_fee
+```
+
+**Typical Rates:**
+- Maker fee: 0.02% - 0.05%
+- Taker fee: 0.05% - 0.10%  
+- Vault portion: 60% - 80%
+- Protocol portion: 20% - 40%
+
+### Fee Distribution
+
+1. **Vault Fee:** Distributed to LP token holders via `collect_pnl()`
+2. **Protocol Fee:** Held in protocol treasury for governance
+
+<Accordion title="Opening Fee Example">
+**Trade Details:**
+- Position value: $10,000
+- Maker amount: $3,000
+- Taker amount: $7,000  
+- Maker rate: 0.03%
+- Taker rate: 0.08%
+- Vault rate: 70%
+
+**Calculation:**
+```
+Maker fee: $3,000 * 0.0003 = $0.90
+Taker fee: $7,000 * 0.0008 = $5.60
+Base fee: $0.90 + $5.60 = $6.50
+
+Vault receives: $6.50 * 0.70 = $4.55
+Protocol receives: $6.50 * 0.30 = $1.95
+
+Total fee: $6.50 (0.065% of position)
+```
+</Accordion>
+
+<Warning>
+Opening fees are deducted from your collateral immediately. Ensure you account for fees when calculating minimum position size requirements.
+</Warning>
+
+## Funding Fees
+
+Continuous fees that balance long and short positions based on market imbalance.
+
+### Purpose
+
+Funding fees incentivize traders to balance the market:
+- **Positive funding:** Longs pay shorts (more long interest)
+- **Negative funding:** Shorts pay longs (more short interest)
+
+### Fee Calculation
+
+Funding fees use a Hill function for smooth, dynamic adjustment:
+
+```move
+struct FundingFee {
+    // Dynamic state
+    accumulated_per_oi_long: SignedBigDecimal,
+    accumulated_per_oi_short: SignedBigDecimal,
+    last_funding_rate_per_second: SignedBigDecimal,
+    
+    // Configuration
+    hill_inflection_point: SignedBigDecimal,
+    max_funding_fee_rate_per_second: BigDecimal,
+    base_spring_factor: BigDecimal,
+    spring_factor_up_scale: BigDecimal,
+    spring_factor_down_scale: BigDecimal,
+    hill_positive_scale: BigDecimal,
+    hill_negative_scale: BigDecimal
+}
+```
+
+### Target Rate Formula
+
+The target funding rate is calculated from normalized OI delta:
+
+```move
+// Step 1: Calculate normalized OI delta
+oi_delta = long_oi - short_oi
+max_oi = max(long_oi, short_oi, open_interest_cap)
+normalized_oi_delta = oi_delta / max_oi  // Range: [-1, 1]
+
+// Step 2: Apply sensitivity scaling  
+x = normalized_oi_delta * imbalance_sensitivity  // Default: 1.84
+
+// Step 3: Hill function
+hill = x² / (x² + inflection_smoothing)  // Range: [0, 1]
+
+// Step 4: Apply directional scaling and inflection point
+if (x >= 0) {
+    target_ratio = hill_positive_scale * hill + hill_inflection_point
+} else {
+    target_ratio = -hill_negative_scale * hill + hill_inflection_point  
+}
+
+// Step 5: Clamp to [-1, 1] and scale to rate
+target_ratio = clamp(target_ratio, -1, 1)
+target_rate = target_ratio * max_funding_fee_rate_per_second
+```
+
+<Accordion title="Hill Function Visualization">
+The Hill function creates a smooth S-curve:
+
+```
+Funding Rate (%/year)
+     |
+100% |                    ___________
+     |                 _-
+     |              _-
+  0% |___________-
+     |          -_
+     |            -_
+-100%|              -___________
+     |__________________________|  
+    -100%   -50%    0%   50%   100%
+           OI Imbalance
+```
+
+Key properties:
+- Smooth transitions (no sudden jumps)
+- Steeper near inflection point  
+- Asymptotic approach to max rate
+- Configurable positive/negative scaling
+</Accordion>
+
+### Spring Dynamics
+
+Funding rate adjusts dynamically using spring factor:
+
+```move
+// Determine spring factor based on rate change
+if (same_direction && increasing_magnitude) {
+    spring = base_spring_factor  // Normal speed
+} else if (same_direction && decreasing_magnitude) {
+    spring = base_spring_factor * spring_factor_down_scale  // Slow down
+} else {
+    spring = base_spring_factor * spring_factor_up_scale  // Speed up
+}
+
+// Exponential convergence
+exp_decay = e^(-spring * time_diff)
+new_rate = target_rate + (last_rate - target_rate) * exp_decay
+```
+
+**Spring Behavior:**
+- **Pulling regime:** Direction changes → Fast convergence (up_scale > 1)
+- **Normal regime:** Same direction, increasing → Normal speed  
+- **Damping regime:** Same direction, decreasing → Slow convergence (down_scale < 1)
+
+<Info>
+Spring dynamics prevent funding rate whiplash and create smooth transitions during volatile periods.
+</Info>
+
+### Accumulated Fees
+
+Fees accumulate per unit of open interest:
+
+```move
+// Integration over time
+acc_funding_rate = target_rate * time_diff + correction_term
+acc_fee_per_oi = acc_funding_rate * last_trade_price
+
+// Distribution based on side
+if (acc_funding_rate > 0) {
+    // Longs pay shorts
+    acc_per_oi_long += acc_fee_per_oi
+    acc_per_oi_short -= acc_fee_per_oi * (long_oi / short_oi)
+} else {
+    // Shorts pay longs  
+    acc_per_oi_short -= acc_fee_per_oi
+    acc_per_oi_long += acc_fee_per_oi * (short_oi / long_oi)
+}
+```
+
+### Position Fee Calculation
+
+When closing a position:
+
+```move
+fee_per_oi_delta = current_acc_per_oi - position.last_updated_acc_per_oi
+funding_fee = fee_per_oi_delta * position.size + position.last_calculated_fee
+```
+
+<Accordion title="Funding Fee Example">
+**Market State:**
+- Long OI: $10M
+- Short OI: $5M  
+- Normalized delta: 0.33 (33% more longs)
+- Max rate: 100% APR (0.0000031688 per second)
+
+**After Hill Function:**
+- Target rate: ~50% APR (0.0000015844 per second)
+- Current rate: 40% APR (exponential approach)
+
+**Your Position:**
+- Size: $50,000 long
+- Held for 7 days = 604,800 seconds
+
+**Fee Calculation:**
+```
+Avg rate over 7 days: 45% APR = 0.0000014256/s
+Acc rate: 0.0000014256 * 604,800 = 0.8623
+Fee per OI: 0.8623 * $30,000 (price) = $25,869 per $1M OI
+
+Your fee: ($50,000 / $1M) * $25,869 = $1,293.45
+         = 2.59% of position size
+         = ~135% APR
+```
+
+Note: Shorts would receive this funding in reverse (earning ~135% APR).
+</Accordion>
+
+<Warning>
+Funding fees compound continuously. Long-duration positions in imbalanced markets can accumulate substantial fees.
+</Warning>
+
+## Rollover Fees
+
+Time-based borrowing fees for leveraged positions.
+
+### Fee Structure
+
+```move
+struct RolloverFee {
+    accumulated_per_oi_long: SignedBigDecimal,
+    accumulated_per_oi_short: SignedBigDecimal,
+    last_pure_long_fee_rate_per_second: SignedBigDecimal,
+    broker_premium_rate_per_second: BigDecimal,
+    max_rollover_fee_rate_per_second: BigDecimal,
+    is_negative_rollover_allowed: bool
+}
+```
+
+### Components
+
+1. **Pure Long Fee Rate:** Base cost of borrowing (set by oracle feeds)
+2. **Broker Premium:** Additional protocol fee
+
+```move
+// For long positions
+rollover_rate = pure_long_fee_rate + broker_premium
+
+// For short positions  
+rollover_rate = broker_premium - pure_long_fee_rate
+
+// Optional: Prevent negative rates
+if (!is_negative_rollover_allowed && rollover_rate < 0) {
+    rollover_rate = 0
+}
+```
+
+### Rate Updates
+
+Rollover rates are updated by authorized feeders:
+
+```move
+update_rollover_fee_per_second(
+    feeder: &signer,
+    asset_id: u64,
+    collateral_metadata: Object<Metadata>,
+    pure_long_fee_rate_per_second: BigDecimal,
+    is_pure_long_fee_rate_per_second_positive: bool
+)
+```
+
+**Validation:**
+```
+assert!(pure_long_rate + broker_premium <= max_rollover_rate)
+```
+
+<Info>
+Pure long rates typically track the risk-free rate (e.g., US Treasury yields) plus an asset-specific risk premium.
+</Info>
+
+### Accumulation
+
+Rollover fees accumulate linearly over time:
+
+```move
+if (is_long_position) {
+    rate = pure_long_fee_rate + broker_premium
+    acc_per_oi = acc_per_oi_long + rate * time_diff * last_trade_price
+} else {
+    rate = broker_premium - pure_long_fee_rate  
+    acc_per_oi = acc_per_oi_short + rate * time_diff * last_trade_price
+}
+```
+
+### Position Fee
+
+```move
+fee_per_oi_delta = current_acc - position.last_updated_acc
+rollover_fee = fee_per_oi_delta * position.size + position.last_calculated_fee
+```
+
+<Accordion title="Rollover Fee Example">
+**Pair Configuration:**
+- Pure long rate: 3% APR (0.00000000951 per second)
+- Broker premium: 2% APR (0.00000000634 per second)
+- Is negative allowed: false
+
+**Long Position:**
+```
+Rate = 3% + 2% = 5% APR  
+Size: $100,000
+Duration: 30 days = 2,592,000 seconds
+
+Acc rate: 0.00000001585 * 2,592,000 = 0.0411
+Acc fee: 0.0411 * $30,000 = $1,233 per $1M OI
+
+Your fee: ($100,000 / $1M) * $1,233 = $123.30
+        = 0.123% for 30 days
+        = 1.48% annualized
+```
+
+**Short Position:**
+```  
+Rate = 2% - 3% = -1% (capped at 0% if negatives not allowed)
+Fee = $0
+```
+
+In this case, shorts pay no rollover fee due to the negative rate cap.
+</Accordion>
+
+### Negative Rollover
+
+Some pairs allow negative rollover rates:
+
+- **Allowed:** Shorts can earn interest (e.g., currency pairs)
+- **Not Allowed:** Minimum rate is 0% (e.g., commodities)
+
+This reflects real-world borrowing costs:
+- Currency shorts earn foreign interest rate  
+- Commodity shorts don't earn storage savings
+
+<Note>
+Negative rollover is configurable per pair. Check pair settings before assuming shorts will earn.
+</Note>
+
+## Combined Fee Impact
+
+### Total Fees
+
+When closing a position, all fees are deducted:
+
+```move
+total_fees = opening_fee + rollover_fees + funding_fees
+net_pnl = price_pnl - total_fees
+```
+
+### Fee Optimization Strategies
+
+<Tip>
+**Minimize Opening Fees:**
+- Trade in the direction that reduces OI imbalance
+- Use limit orders to act as maker
+- Avoid trading when spreads are high
+</Tip>
+
+<Tip>
+**Minimize Funding Fees:**  
+- Trade on the side that receives funding
+- Close positions before funding accumulates significantly
+- Monitor funding rates and adjust positions
+</Tip>
+
+<Tip>
+**Minimize Rollover Fees:**
+- Use lower leverage to reduce position size
+- Close positions before holding overnight (if high rates)
+- Consider pairs where your direction has favorable rollover
+</Tip>
+
+## Fee Queries
+
+### Get Current Rates
+
+```move
+get_pair_state(
+    asset_id: u64,
+    collateral_metadata: Object<Metadata>  
+): GetPairStateResponse
+```
+
+Returns:
+- Current maker/taker rates
+- Accumulated funding fees per OI
+- Current funding rate
+- Accumulated rollover fees per OI  
+- Pure long fee rate
+
+### Estimate Position Fees
+
+To estimate fees for a new position:
+
+```move
+// Opening fee
+(protocol_fee, vault_fee) = pair_info.get_opening_fees(
+    price,
+    collateral_price,
+    position_value
+)
+
+// Funding & rollover (query accumulated rates)
+(acc_rollover, acc_funding) = get_acc_fees(
+    asset_id,
+    collateral_metadata,
+    is_long_position
+)
+```
+
+<Info>
+Use view functions to estimate fees before opening positions. This helps you accurately calculate required collateral and expected PnL.
+</Info>
+
+## Fee Limits
+
+Global and per-pair limits prevent excessive fees:
+
+```move
+struct Config {
+    max_fee_rate: BigDecimal,                      // Max opening fee
+    max_funding_fee_rate_per_second: BigDecimal,   // ~100% APR
+    max_rollover_fee_rate_per_second: BigDecimal,  // ~30% APR  
+    max_broker_premium_rate_per_second: BigDecimal // ~10% APR
+}
+```
+
+**Enforcement:**
+```
+assert!(maker_fee_rate <= max_fee_rate)
+assert!(taker_fee_rate <= max_fee_rate)
+assert!(funding_rate <= max_funding_fee_rate)
+assert!(pure_long_rate + broker_premium <= max_rollover_rate)
+```
+
+<Warning>
+Governance can adjust fee limits. Always check current limits before making assumptions about maximum costs.
+</Warning>
+
+## Best Practices
+
+<Tip>
+**Fee Awareness:**
+- Calculate total expected fees before opening positions
+- Include fees in profit target calculations  
+- Monitor accumulated fees on open positions
+- Close positions before fees erode profits
+</Tip>
+
+<Tip>
+**Fee Minimization:**
+- Act as maker when possible (reduce OI imbalance)
+- Trade during low-spread periods
+- Avoid holding positions during extreme funding periods  
+- Use appropriate leverage for your holding period
+</Tip>
+
+<Tip>
+**Position Monitoring:**
+- Check funding rates daily for multi-day positions
+- Set alerts for funding rate spikes
+- Consider partial closes to reduce fee exposure
+- Rebalance when fees exceed a threshold (e.g., 1% of position)
+</Tip>

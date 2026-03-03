@@ -1,0 +1,411 @@
+---
+title: Pre-Deposit Points System
+description: Points system for early depositors with time-based emission rewards
+---
+
+The pre-deposit points module implements a reward system for early depositors who lock or deposit collateral before the main protocol launch. Users earn points based on their deposit amounts and duration.
+
+## Overview
+
+This module provides two distinct point earning mechanisms:
+- **Deposit Points**: Earned by depositing collateral to the module
+- **Lock Points**: Earned by locking collateral in the vault system
+
+Both systems use time-based emission with daily emission rates and accumulate points proportionally to deposit amounts and duration.
+
+## Key Features
+
+- **Dual Point Systems**: Separate tracking for deposits and locks
+- **Time-based Rewards**: Points accrue over time based on daily emission rates
+- **Amount Caps**: Configurable maximum deposit amounts
+- **Close Mechanism**: Admin can set a close timestamp to freeze points
+- **Auto-withdrawal**: Admin can batch withdraw deposits for users after close
+
+## Data Structures
+
+### PointStore
+
+Main storage structure:
+- `collateral_metadata`: The collateral token being tracked
+- `close_timestamp`: Timestamp when deposits are frozen (0 if not set)
+- `deposit_point`: Point data for direct deposits
+- `lock_point`: Point data for vault locks
+
+### Point
+
+Point accumulation data:
+- `user_points`: Mapping of users to their point data
+- `global_index`: Global accumulator for point distribution
+- `last_updated_timestamp`: Last time global index was updated
+- `daily_emission`: Points emitted per day
+- `total_amount`: Total amount deposited across all users
+- `amount_cap`: Maximum total amount allowed
+
+### UserPoint
+
+Per-user point data:
+- `point`: Accumulated points (BigDecimal for precision)
+- `amount`: Current deposit/lock amount
+- `last_index`: User's checkpoint of global index
+
+## View Functions
+
+### get_deposit_points
+
+Get paginated deposit points for all users.
+
+```move
+#[view]
+public fun get_deposit_points(
+    limit: u64,
+    start_after: Option<address>
+): vector<PointResponse>
+```
+
+<ParamField path="limit" type="u64">
+  Maximum number of results to return
+</ParamField>
+
+<ParamField path="start_after" type="Option<address>">
+  Pagination cursor - address to start after
+</ParamField>
+
+**Returns**: Vector of `PointResponse` containing user addresses and point amounts
+
+### get_lock_points
+
+Get paginated lock points for all users.
+
+```move
+#[view]
+public fun get_lock_points(
+    limit: u64,
+    start_after: Option<address>
+): vector<PointResponse>
+```
+
+<ParamField path="limit" type="u64">
+  Maximum number of results to return
+</ParamField>
+
+<ParamField path="start_after" type="Option<address>">
+  Pagination cursor - address to start after
+</ParamField>
+
+**Returns**: Vector of `PointResponse` containing user addresses and point amounts
+
+### get_user_points
+
+Get both deposit and lock points for a specific user.
+
+```move
+#[view]
+public fun get_user_points(user_addr: address): UserPointsResponse
+```
+
+<ParamField path="user_addr" type="address">
+  The user's address
+</ParamField>
+
+**Returns**: `UserPointsResponse` with both deposit_point and lock_point
+
+### get_user_amounts
+
+Get the deposited and locked amounts for a specific user.
+
+```move
+#[view]
+public fun get_user_amounts(user_addr: address): UserAmountsResponse
+```
+
+<ParamField path="user_addr" type="address">
+  The user's address
+</ParamField>
+
+**Returns**: `UserAmountsResponse` with deposited_amount and locked_amount
+
+## Admin Functions
+
+### initialize
+
+Initialize the points system.
+
+```move
+public entry fun initialize(
+    publisher: &signer,
+    collateral_metadata: Object<Metadata>,
+    deposit_daily_emission: u64,
+    lock_daily_emission: u64
+)
+```
+
+<ParamField path="publisher" type="&signer">
+  The module publisher (must be @point)
+</ParamField>
+
+<ParamField path="collateral_metadata" type="Object<Metadata>">
+  The collateral token metadata
+</ParamField>
+
+<ParamField path="deposit_daily_emission" type="u64">
+  Points emitted per day for deposits
+</ParamField>
+
+<ParamField path="lock_daily_emission" type="u64">
+  Points emitted per day for locks
+</ParamField>
+
+### update_amount_cap
+
+Update the maximum allowed deposit amounts.
+
+```move
+public entry fun update_amount_cap(
+    admin: &signer,
+    deposit_amount_cap: u64,
+    lock_amount_cap: u64
+)
+```
+
+<ParamField path="admin" type="&signer">
+  The admin signer
+</ParamField>
+
+<ParamField path="deposit_amount_cap" type="u64">
+  Maximum total amount for deposits
+</ParamField>
+
+<ParamField path="lock_amount_cap" type="u64">
+  Maximum total amount for locks
+</ParamField>
+
+### update_daily_emission
+
+Update the daily emission rates.
+
+```move
+public entry fun update_daily_emission(
+    admin: &signer,
+    deposit_daily_emission: u64,
+    lock_daily_emission: u64
+)
+```
+
+<ParamField path="admin" type="&signer">
+  The admin signer
+</ParamField>
+
+<ParamField path="deposit_daily_emission" type="u64">
+  New daily emission for deposits
+</ParamField>
+
+<ParamField path="lock_daily_emission" type="u64">
+  New daily emission for locks
+</ParamField>
+
+**Note**: This function updates the global index before changing emission rates to ensure fair point distribution.
+
+### set_close_timestamp
+
+Set the timestamp when deposits will be frozen.
+
+```move
+public entry fun set_close_timestamp(
+    admin: &signer,
+    close_timestamp: u64
+)
+```
+
+<ParamField path="admin" type="&signer">
+  The admin signer
+</ParamField>
+
+<ParamField path="close_timestamp" type="u64">
+  Timestamp to close deposits (must be >= current time)
+</ParamField>
+
+**Requirements**:
+- Deposits must not already be closed
+- Close timestamp must be in the future or current time
+
+### auto_withdraw
+
+Batch withdraw deposits for users after close.
+
+```move
+public entry fun auto_withdraw(
+    admin: &signer,
+    users: vector<address>
+)
+```
+
+<ParamField path="admin" type="&signer">
+  The admin signer
+</ParamField>
+
+<ParamField path="users" type="vector<address>">
+  List of user addresses to withdraw for
+</ParamField>
+
+**Requirements**:
+- Current time must be >= close_timestamp
+
+**Note**: This withdraws deposited collateral and sends it back to users. It does not affect points or locked amounts.
+
+## User Functions
+
+### deposit
+
+Deposit collateral to earn deposit points.
+
+```move
+public entry fun deposit(account: &signer, amount: u64)
+```
+
+<ParamField path="account" type="&signer">
+  The user depositing collateral
+</ParamField>
+
+<ParamField path="amount" type="u64">
+  Amount of collateral to deposit
+</ParamField>
+
+**Requirements**:
+- Deposits must not be closed
+- Total amount must not exceed deposit_amount_cap
+
+**Effects**:
+- Transfers collateral from user to module
+- Updates user's deposit points
+- Increases user's deposited amount
+
+### lock
+
+Lock collateral in vault to earn lock points.
+
+```move
+public entry fun lock(account: &signer, amount: u64)
+```
+
+<ParamField path="account" type="&signer">
+  The user locking collateral
+</ParamField>
+
+<ParamField path="amount" type="u64">
+  Amount of collateral to lock
+</ParamField>
+
+**Requirements**:
+- Deposits must not be closed
+- Total amount must not exceed lock_amount_cap
+
+**Effects**:
+- Deposits collateral to vault
+- Updates user's lock points
+- Increases user's locked amount
+
+### withdraw
+
+Withdraw deposited collateral.
+
+```move
+public entry fun withdraw(account: &signer, amount: u64)
+```
+
+<ParamField path="account" type="&signer">
+  The user withdrawing collateral
+</ParamField>
+
+<ParamField path="amount" type="u64">
+  Amount of collateral to withdraw
+</ParamField>
+
+**Requirements**:
+- Deposits must not be closed
+- User must have sufficient deposited amount
+
+**Effects**:
+- Transfers collateral from module to user
+- Updates user's deposit points
+- Decreases user's deposited amount
+
+**Note**: Users cannot withdraw after the close timestamp. Admin must use `auto_withdraw` instead.
+
+## Point Calculation
+
+Points are calculated using a global index system:
+
+### Global Index
+
+The global index accumulates over time:
+
+```
+global_index += (daily_emission * time_diff) / (DAY * total_amount)
+```
+
+Where:
+- `daily_emission`: Points emitted per day
+- `time_diff`: Time elapsed since last update (seconds)
+- `DAY`: 86400 seconds
+- `total_amount`: Total deposits across all users
+
+### User Points
+
+When a user's points are calculated:
+
+```
+user_point += (global_index - user_last_index) * user_amount
+```
+
+This ensures:
+- Points are proportional to deposit amount
+- Points accrue over time
+- Fair distribution based on share of total deposits
+
+## Close Mechanism
+
+The close mechanism allows the admin to freeze deposits:
+
+1. **Before Close**: Users can deposit, lock, and withdraw freely
+2. **Set Close**: Admin sets a future close timestamp
+3. **After Close**: 
+   - No deposits, locks, or withdrawals allowed
+   - Points continue to accrue until close timestamp
+   - Admin can batch withdraw for users
+
+**Point Calculation After Close**:
+- If current time > close_timestamp, use close_timestamp for calculations
+- This freezes point accumulation at the close time
+
+## Constants
+
+- `DAY`: 86400 seconds (60 * 60 * 24)
+
+## Response Types
+
+### PointResponse
+
+```move
+struct PointResponse has drop {
+    user_addr: address,
+    point: u64
+}
+```
+
+### UserPointsResponse
+
+```move
+struct UserPointsResponse has drop {
+    deposit_point: u64,
+    lock_point: u64
+}
+```
+
+### UserAmountsResponse
+
+```move
+struct UserAmountsResponse has drop {
+    deposited_amount: u64,
+    locked_amount: u64
+}
+```

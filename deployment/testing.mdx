@@ -1,0 +1,315 @@
+---
+title: Testing
+description: Run tests and verify contract functionality before deployment
+---
+
+## Test Suite Overview
+
+Strat Perpetual DEX includes a comprehensive test suite covering all core modules. Tests ensure contract correctness, edge case handling, and integration between modules.
+
+### Available Test Modules
+
+The test suite includes:
+
+- `test_gov.move` - Governance configuration and admin functions
+- `test_order.move` - Order creation, cancellation, and execution
+- `test_position.move` - Position management and calculations
+- `test_vault.move` - Collateral deposits, LP operations, and withdrawals
+- `test_oracle_aggregator.move` - Oracle price fetching and aggregation
+- `test_oracle.move` - Oracle integration tests
+- `test_order_executor.move` - Keeper execution logic
+- `test_pair.move` - Trading pair configuration
+- `test_vip_score.move` - VIP scoring system
+- `test_utils.move` - Utility function tests
+- `test_dynamic_spread.move` - Dynamic spread calculations
+- `test_day_trade.move` - Day trading restrictions
+
+## Running Tests
+
+### Run All Tests
+
+Execute the complete test suite:
+
+```bash
+initiad move test --dev
+```
+
+The `--dev` flag automatically uses the development addresses defined in `Move.toml`:
+
+```toml
+[dev-addresses]
+strat = "0x3"
+vip_score = "0x4"
+point = "0x5"
+stork = "0x6"
+```
+
+### Run Specific Test Modules
+
+<CodeGroup>
+```bash Single Module
+# Test only governance
+initiad move test --dev --filter test_gov
+```
+
+```bash Multiple Modules
+# Test orders and positions
+initiad move test --dev --filter test_order --filter test_position
+```
+
+```bash Specific Test Function
+# Run a single test
+initiad move test --dev --filter test_update_order_config
+```
+</CodeGroup>
+
+### Verbose Output
+
+View detailed test execution:
+
+```bash
+initiad move test --dev --verbose
+```
+
+This shows:
+- Individual test execution
+- Gas usage per test
+- Assertion details
+- Event emissions
+
+## Test Coverage
+
+### Core Functionality Tests
+
+<AccordionGroup>
+  <Accordion title="Governance (test_gov.move)">
+    **Coverage:**
+    - Order configuration updates
+    - Protocol fee withdrawal
+    - Collateral oracle registration
+    - Trading pair registration
+    - Group management
+    - Epoch initialization
+
+    **Example test:**
+    ```move
+    #[test(strat = @strat)]
+    fun test_update_order_config(strat: &signer) {
+        gov::init_module_for_test(strat);
+        gov::update_order_config(strat, 1000, 1000);
+        assert!(order::get_market_timeout() == 1000, 1);
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Order Management (test_order.move)">
+    **Coverage:**
+    - Market and limit order creation
+    - Order cancellation
+    - Order modification
+    - Position opening via orders
+    - Collateral management
+    - Fee calculations
+  </Accordion>
+
+  <Accordion title="Position Tracking (test_position.move)">
+    **Coverage:**
+    - Position creation
+    - PnL calculations
+    - Leverage validation
+    - Position closure
+    - Liquidation logic
+    - Funding fee accrual
+  </Accordion>
+
+  <Accordion title="Vault Operations (test_vault.move)">
+    **Coverage:**
+    - Collateral deposits
+    - LP token minting
+    - Withdrawals
+    - Fee collection
+    - Liquidity buffer calculations
+    - LP token pricing
+  </Accordion>
+
+  <Accordion title="Oracle Integration (test_oracle_aggregator.move)">
+    **Coverage:**
+    - Price feed fetching from Stork
+    - Price aggregation across sources
+    - Decimal normalization
+    - Staleness checks
+    - Fallback mechanisms
+  </Accordion>
+
+  <Accordion title="Order Execution (test_order_executor.move)">
+    **Coverage:**
+    - Keeper execution permissions
+    - Order condition validation
+    - Execution timing
+    - Fee distribution
+    - Failed execution handling
+  </Accordion>
+</AccordionGroup>
+
+## Test Utilities
+
+Tests use helper functions from `test_utils.move` for setup:
+
+```move
+#[test_only]
+module strat::test_utils {
+    // Initialize modules for testing
+    public fun init_module_for_test(strat: &signer);
+    
+    // Get deployer address
+    public fun deployer_address(): address;
+    
+    // Additional test helpers...
+}
+```
+
+### Common Test Patterns
+
+**Initialize modules:**
+```move
+use strat::test_utils;
+
+#[test(strat = @strat)]
+fun test_something(strat: &signer) {
+    test_utils::init_module_for_test(strat);
+    // Test logic...
+}
+```
+
+**Setup VIP scoring:**
+```move
+use vip_score::vip_score;
+use strat::utils;
+
+fun init_vip_score(strat: &signer, vip_score: &signer) {
+    utils::init_module_for_test(strat);
+    vip_score::init_for_test(vip_score, utils::deployer_address());
+}
+```
+
+## Debugging Failed Tests
+
+### Common Test Failures
+
+<Warning>
+**Address Mismatch**
+
+Error: `Module resolution error`
+
+Solution: Ensure you're using `--dev` flag or correct named addresses
+</Warning>
+
+<Warning>
+**Assertion Failures**
+
+Error: `Assertion failed with code X`
+
+Solution: Check the assertion code in test source to identify which validation failed
+</Warning>
+
+<Warning>
+**Dependency Errors**
+
+Error: `Unable to resolve dependency`
+
+Solution: Run `initiad move build --dev` first to fetch dependencies
+</Warning>
+
+### Debug Test Output
+
+Add debug output in tests:
+
+```move
+use std::debug;
+
+#[test]
+fun test_with_debug() {
+    let value = some_calculation();
+    debug::print(&value);  // Print for debugging
+    assert!(value == expected, 1);
+}
+```
+
+Run with verbose flag to see debug output:
+
+```bash
+initiad move test --dev --verbose
+```
+
+## Pre-Deployment Checklist
+
+Before deploying to production, verify:
+
+<Steps>
+  <Step title="All Tests Pass">
+    ```bash
+    initiad move test --dev
+    ```
+    
+    Ensure 100% of tests pass with no errors.
+  </Step>
+
+  <Step title="Build Succeeds with Production Addresses">
+    ```bash
+    initiad move build --named-addresses \
+      "strat=0xPROD_ADDR,vip_score=0x...,point=0x...,stork=0x..."
+    ```
+    
+    Verify the build completes without errors.
+  </Step>
+
+  <Step title="Review Test Coverage">
+    Ensure critical paths are tested:
+    - Order creation and execution
+    - Position opening and closing
+    - Liquidation scenarios
+    - Oracle price updates
+    - Vault deposits and withdrawals
+  </Step>
+
+  <Step title="Run Integration Tests">
+    Test full workflows that span multiple modules:
+    - User deposits → creates order → position opened → position closed → withdrawal
+    - Oracle price change → liquidation triggered → vault receives collateral
+  </Step>
+</Steps>
+
+## Continuous Testing
+
+### Testing During Development
+
+Run tests frequently during development:
+
+```bash
+# Quick feedback loop
+initiad move test --dev --filter test_module_name
+```
+
+### Pre-Commit Testing
+
+The repository includes a pre-commit hook configuration (`.pre-commit-config.yaml`). Set up pre-commit hooks:
+
+```bash
+# Install pre-commit
+pip install pre-commit
+
+# Install hooks
+pre-commit install
+```
+
+Tests will run automatically before commits.
+
+## Next Steps
+
+After successful testing:
+
+1. Prepare production addresses for deployment
+2. Build contracts with production addresses
+3. Deploy to testnet first for final validation
+4. Execute deployment scripts (e.g., `test_publish.move`)
+5. Verify deployed contracts on-chain

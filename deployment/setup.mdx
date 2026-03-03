@@ -1,0 +1,135 @@
+---
+title: Environment Setup
+description: Install dependencies and set up your development environment for Strat Perpetual DEX
+---
+
+## Prerequisites
+
+Before deploying Strat Perpetual DEX smart contracts, ensure you have the necessary tools and dependencies installed.
+
+### Required Tools
+
+<Steps>
+  <Step title="Install initiad CLI">
+    The initiad CLI is required to build, test, and deploy Move smart contracts on Initia.
+
+    Download and install from the [Initia documentation](https://docs.initia.xyz) or build from source:
+
+    ```bash
+    git clone https://github.com/initia-labs/initia.git
+    cd initia
+    make install
+    ```
+
+    Verify installation:
+
+    ```bash
+    initiad version
+    ```
+  </Step>
+
+  <Step title="Install Git">
+    Git is required to clone the repository and manage dependencies:
+
+    ```bash
+    # Ubuntu/Debian
+    sudo apt-get install git
+
+    # macOS
+    brew install git
+    ```
+  </Step>
+
+  <Step title="Clone the Repository">
+    Clone the Strat Perpetual DEX contracts repository:
+
+    ```bash
+    git clone <repository-url>
+    cd strat-perp-dex
+    ```
+  </Step>
+</Steps>
+
+## Dependencies
+
+The project relies on two primary dependencies specified in `Move.toml`:
+
+### InitiaStdlib
+
+The Initia standard library provides core functionality for Move contracts on Initia:
+
+```toml
+InitiaStdlib = { 
+  git = "https://github.com/initia-labs/movevm.git", 
+  subdir = "precompile/modules/initia_stdlib", 
+  rev = "main" 
+}
+```
+
+**Features:**
+- Coin and fungible asset management
+- BigDecimal arithmetic for precision calculations
+- Block and timestamp utilities
+- Cryptographic functions (Keccak256)
+
+### Stork Oracle
+
+Stork provides real-time price feeds for trading pairs:
+
+```toml
+stork = { 
+  git = "https://github.com/Stork-Oracle/stork-external.git", 
+  subdir = "chains/initia_minimove/contracts", 
+  rev = "main" 
+}
+```
+
+**Usage:**
+- Asset price oracles (BTC/USD, stock prices)
+- Trading status information (market hours)
+- Multi-source price aggregation
+
+## Dependency Resolution
+
+Dependencies are automatically fetched when you build the project:
+
+```bash
+initiad move build
+```
+
+The Move package manager will:
+1. Clone the specified Git repositories
+2. Check out the correct revision
+3. Navigate to the specified subdirectory
+4. Compile and link the dependencies
+
+## Directory Structure
+
+After setup, your project structure should look like:
+
+```
+strat-perp-dex/
+├── Move.toml              # Package configuration
+├── sources/               # Contract source code
+│   ├── gov.move          # Governance module
+│   ├── order.move        # Order management
+│   ├── position.move     # Position tracking
+│   ├── vault.move        # Collateral & LP management
+│   ├── oracle_aggregator.move
+│   ├── order_executor.move
+│   ├── pair.move
+│   ├── referral.move
+│   ├── signed_bigdecimal.move
+│   ├── utils.move
+│   ├── test/             # Test modules
+│   └── scripts/          # Deployment scripts
+└── build/                # Compiled output (generated)
+```
+
+## Next Steps
+
+After completing the environment setup:
+
+1. Configure named addresses in [Move.toml](/deployment/configuration)
+2. Run tests to verify your setup works correctly
+3. Proceed to deployment with configured addresses

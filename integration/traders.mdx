@@ -1,0 +1,295 @@
+---
+title: Trader Integration
+description: Learn how to integrate with Strat Perpetual DEX as a trader to create orders and manage positions
+---
+
+This guide covers how traders can integrate with Strat Perpetual DEX to open and manage leveraged positions.
+
+## Overview
+
+Traders interact with the `strat::order` module to:
+- Create market, limit, and stop orders to open positions
+- Close positions with market orders
+- Manage existing positions (update TP/SL, add/remove collateral)
+- Cancel pending orders
+
+## Opening Positions
+
+Traders can open positions using three order types: market, limit, and stop orders.
+
+<Steps>
+  <Step title="Create a Market Order">
+    Market orders execute immediately at the current price with slippage protection.
+
+    ```move
+    public entry fun create_market_open_order(
+        account: &signer,
+        asset_id: u64,
+        collateral_metadata: Object<Metadata>,
+        collateral_amount: u64,
+        target_price: BigDecimal,
+        tp_price: BigDecimal,
+        sl_price: BigDecimal,
+        leverage: BigDecimal,
+        is_long_position: bool,
+        max_slippage: BigDecimal
+    )
+    ```
+
+    <ParamField path="asset_id" type="u64" required>
+      ID of the trading pair asset (e.g., BTC, ETH)
+    </ParamField>
+
+    <ParamField path="collateral_metadata" type="Object<Metadata>" required>
+      Metadata object for the collateral token
+    </ParamField>
+
+    <ParamField path="collateral_amount" type="u64" required>
+      Amount of collateral to deposit (in token's smallest unit)
+    </ParamField>
+
+    <ParamField path="target_price" type="BigDecimal" required>
+      Expected execution price
+    </ParamField>
+
+    <ParamField path="tp_price" type="BigDecimal" required>
+      Take profit price (set to zero if not used)
+    </ParamField>
+
+    <ParamField path="sl_price" type="BigDecimal" required>
+      Stop loss price (set to zero if not used)
+    </ParamField>
+
+    <ParamField path="leverage" type="BigDecimal" required>
+      Leverage multiplier (e.g., 10x)
+    </ParamField>
+
+    <ParamField path="is_long_position" type="bool" required>
+      true for long position, false for short position
+    </ParamField>
+
+    <ParamField path="max_slippage" type="BigDecimal" required>
+      Maximum acceptable slippage percentage
+    </ParamField>
+  </Step>
+
+  <Step title="Create a Limit Order">
+    Limit orders execute when the market price reaches the target price.
+
+    ```move
+    public entry fun create_limit_open_order(
+        account: &signer,
+        asset_id: u64,
+        collateral_metadata: Object<Metadata>,
+        collateral_amount: u64,
+        target_price: BigDecimal,
+        tp_price: BigDecimal,
+        sl_price: BigDecimal,
+        leverage: BigDecimal,
+        is_long_position: bool
+    )
+    ```
+
+    Parameters are the same as market orders except `max_slippage` is not required.
+  </Step>
+
+  <Step title="Create a Stop Order">
+    Stop orders trigger when the market price crosses the target price.
+
+    ```move
+    public entry fun create_stop_open_order(
+        account: &signer,
+        asset_id: u64,
+        collateral_metadata: Object<Metadata>,
+        collateral_amount: u64,
+        target_price: BigDecimal,
+        tp_price: BigDecimal,
+        sl_price: BigDecimal,
+        leverage: BigDecimal,
+        is_long_position: bool
+    )
+    ```
+
+    Parameters are the same as limit orders.
+  </Step>
+</Steps>
+
+## Closing Positions
+
+<Steps>
+  <Step title="Create a Market Close Order">
+    Close all or part of an existing position at market price.
+
+    ```move
+    public entry fun create_market_close_order(
+        account: &signer,
+        position_id: u64,
+        target_price: BigDecimal,
+        max_slippage: BigDecimal,
+        collateral_close_amount: Option<u64>
+    )
+    ```
+
+    <ParamField path="position_id" type="u64" required>
+      ID of the position to close
+    </ParamField>
+
+    <ParamField path="target_price" type="BigDecimal" required>
+      Expected close price
+    </ParamField>
+
+    <ParamField path="max_slippage" type="BigDecimal" required>
+      Maximum acceptable slippage
+    </ParamField>
+
+    <ParamField path="collateral_close_amount" type="Option<u64>" required>
+      Amount of collateral to close (None to close entire position)
+    </ParamField>
+  </Step>
+
+  <Step title="Cancel Close Order">
+    Cancel a pending close order after the timeout period.
+
+    ```move
+    public entry fun cancel_market_close_order(
+        account: &signer,
+        order_id: u64
+    )
+    ```
+  </Step>
+</Steps>
+
+## Managing Positions
+
+### Update Take Profit and Stop Loss
+
+Modify TP/SL prices for an existing position.
+
+```move
+public entry fun update_position(
+    account: &signer,
+    position_id: u64,
+    new_tp_price: BigDecimal,
+    new_sl_price: BigDecimal
+)
+```
+
+### Add Collateral
+
+Increase collateral to reduce leverage and liquidation risk.
+
+```move
+public entry fun add_collateral(
+    account: &signer,
+    position_id: u64,
+    collateral_amount: u64
+)
+```
+
+### Remove Collateral
+
+Create an order to remove collateral (increases leverage).
+
+```move
+public entry fun remove_collateral(
+    account: &signer,
+    position_id: u64,
+    collateral_amount: u64
+)
+```
+
+<Note>
+Removing collateral creates an order that must be executed by a keeper. You can cancel this order before execution using `cancel_remove_collateral_order`.
+</Note>
+
+## Canceling Orders
+
+Cancel pending orders that haven't been executed.
+
+### Cancel Open Order
+
+```move
+public entry fun cancel_open_order(
+    account: &signer,
+    order_id: u64
+)
+```
+
+<Warning>
+Market orders can only be cancelled after the timeout period (default 1 minute).
+</Warning>
+
+### Cancel Remove Collateral Order
+
+```move
+public entry fun cancel_remove_collateral_order(
+    account: &signer,
+    order_id: u64
+)
+```
+
+## Integration Example
+
+Here's a complete example of opening a long position with 10x leverage:
+
+```move
+script {
+    use strat::order;
+    use initia_std::bigdecimal;
+    use initia_std::object;
+
+    fun open_btc_long(account: &signer) {
+        // Open 10x long BTC position
+        order::create_market_open_order(
+            account,
+            1, // BTC asset_id
+            object::address_to_object(@0xUSDC_ADDRESS), // USDC collateral
+            1000_000000, // 1000 USDC (6 decimals)
+            bigdecimal::from_u64(50000), // Target price $50,000
+            bigdecimal::from_u64(55000), // Take profit at $55,000
+            bigdecimal::from_u64(48000), // Stop loss at $48,000
+            bigdecimal::from_u64(10), // 10x leverage
+            true, // Long position
+            bigdecimal::from_ratio(5, 100) // 0.05 = 5% max slippage
+        );
+    }
+}
+```
+
+## Query Functions
+
+View your orders and positions using these view functions:
+
+```move
+// Get user's open orders
+#[view]
+public fun get_user_open_orders(
+    user_addr: address,
+    limit: u64,
+    key: Option<u64>
+): PaginationResponse<u64, OpenOrderResponse>
+
+// Get user's close orders
+#[view]
+public fun get_user_close_orders(
+    user_addr: address,
+    limit: u64,
+    key: Option<vector<u8>>
+): PaginationResponse<vector<u8>, CloseOrderResponse>
+
+// Get user's remove collateral orders
+#[view]
+public fun get_user_remove_collateral_orders(
+    user_addr: address,
+    limit: u64,
+    key: Option<vector<u8>>
+): PaginationResponse<vector<u8>, RemoveCollateralOrderResponse>
+```
+
+## Best Practices
+
+1. **Always set appropriate TP/SL**: Protect your positions from extreme market movements
+2. **Monitor liquidation price**: Ensure sufficient collateral to avoid liquidation
+3. **Use limit orders for better fills**: Avoid slippage on large positions
+4. **Cancel stale orders**: Clean up orders that are no longer needed
+5. **Check market hours**: Some pairs may have restricted trading hours

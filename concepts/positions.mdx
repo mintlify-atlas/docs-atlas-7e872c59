@@ -1,0 +1,419 @@
+---
+title: "Positions"
+description: "Understanding position management, leverage mechanics, PnL calculation, and collateral adjustments"
+---
+
+## Overview
+
+Positions on Strat are perpetual futures contracts that allow traders to gain leveraged exposure to assets. Each position is uniquely identified by the combination of user address, asset ID, collateral type, and direction (long/short).
+
+## Position Structure
+
+Each position contains:
+
+```move
+struct Position {
+    position_id: u64,                    // Unique identifier
+    asset_id: u64,                       // Trading pair ID
+    user_addr: address,                  // Owner address
+    collateral_metadata: Object<Metadata>, // Collateral token
+    collateral_amount: u64,              // Amount of collateral
+    open_price: BigDecimal,              // Average entry price
+    tp_price: BigDecimal,                // Take profit price (0 = none)
+    sl_price: BigDecimal,                // Stop loss price (0 = none)
+    initial_leverage: BigDecimal,        // Leverage at opening
+    leverage: BigDecimal,                // Current leverage
+    margin_value: BigDecimal,            // Sum of collateral values
+    size: BigDecimal,                    // Position size in asset units
+    is_long_position: bool,              // True for long, false for short
+    
+    // Fee tracking
+    last_updated_accumulated_rollover_fee_per_oi: SignedBigDecimal,
+    last_updated_accumulated_funding_fee_per_oi: SignedBigDecimal,
+    last_calculated_rollover_fee: SignedBigDecimal,
+    last_calculated_funding_fee: SignedBigDecimal
+}
+```
+
+## Opening Positions
+
+Positions are created when orders execute. The initial parameters are calculated as:
+
+```
+margin_value = collateral_amount * collateral_price
+position_size = (margin_value * leverage) / execution_price
+initial_leverage = leverage
+```
+
+### Merging Positions
+
+If you open a new order for the same asset-collateral-direction combination, it merges with your existing position:
+
+**Merged Calculations:**
+
+```move
+// New leverage (collateral-weighted average)
+new_leverage = (leverage₁ * collateral₁ + leverage₂ * collateral₂) 
+               / (collateral₁ + collateral₂)
+
+// New open price (size-weighted average)
+new_open_price = (open_price₁ * size₁ + open_price₂ * size₂) 
+                 / (size₁ + size₂)
+
+// Summed values
+new_collateral = collateral₁ + collateral₂
+new_margin_value = margin_value₁ + margin_value₂
+new_size = size₁ + size₂
+```
+
+<Info>
+Merging positions recalculates your average entry price and leverage. TP/SL from the new order replace the previous ones.
+</Info>
+
+## Leverage Mechanics
+
+### Leverage Calculation
+
+Leverage represents how much your position size is amplified relative to your collateral:
+
+```
+leverage = position_size * current_price / margin_value
+```
+
+**Key Points:**
+- Leverage changes as price moves (for profitable positions)
+- Initial leverage is locked at position opening
+- Max PnL calculations use `max(initial_leverage, current_leverage)`
+
+### Leverage Constraints
+
+```move
+// Position must satisfy leverage limits
+min_leverage <= leverage <= max_leverage
+
+// Overnight positions (if not extended hours)
+leverage <= max_overnight_leverage
+```
+
+<Warning>
+Positions exceeding the overnight leverage limit must be closed during the wind-down window, or they will be automatically closed by the protocol.
+</Warning>
+
+### Dynamic Leverage
+
+As your position becomes profitable, your effective leverage decreases:
+
+**Example (Long Position):**
+```
+Initial: 10 ETH @ $2000, 10x leverage, $20,000 collateral
+→ Position size: 100 ETH ($200,000 exposure)
+
+Price rises to $2200:
+→ Position value: $220,000
+→ Equity: $20,000 + $20,000 profit = $40,000
+→ New leverage: $220,000 / $40,000 = 5.5x
+```
+
+## PnL Calculation
+
+### Price-Based PnL
+
+The unrealized profit or loss from price movement:
+
+```move
+price_diff = current_price - open_price
+pnl_by_price = price_diff * position_size
+
+// For short positions, negate the PnL
+if (!is_long_position) {
+    pnl_by_price = -pnl_by_price
+}
+```
+
+### Maximum PnL Cap
+
+To protect the vault, PnL is capped at a maximum ratio (default 9x):
+
+```move
+max_tp_diff = open_price * max_pnl_ratio / max(initial_leverage, leverage)
+max_pnl = max_tp_diff * position_size
+
+// Actual PnL is capped
+final_pnl = min(pnl_by_price, max_pnl)
+```
+
+<Accordion title="Why Cap PnL?">
+The maximum PnL cap protects liquidity providers from unlimited losses. Without it:
+
+1. A trader with 50x leverage could gain 450x (50 * 9 = 450)
+2. This would exceed the vault's available liquidity
+3. The vault could become insolvent
+
+The 9x cap means:
+- At 10x leverage: Max 90% gain on collateral
+- At 50x leverage: Max 18% gain on collateral  
+- At 1x leverage: Max 900% gain on collateral
+
+Higher leverage = lower max profit percentage to maintain the same absolute dollar cap.
+</Accordion>
+
+### Total PnL
+
+The final PnL includes fees:
+
+```move
+total_pnl = pnl_by_price - rollover_fees - funding_fees
+```
+
+See the [Fees documentation](/concepts/fees) for detailed fee calculations.
+
+## Collateral Management
+
+### Adding Collateral
+
+Increase your position's collateral to reduce leverage:
+
+```move
+add_collateral(
+    account: &signer,
+    position_id: u64,
+    collateral_amount: u64
+)
+```
+
+**Effects:**
+```
+new_collateral = old_collateral + additional_collateral
+new_leverage = (old_leverage * old_collateral) / new_collateral
+new_margin_value = (old_margin_value * new_collateral) / old_collateral
+```
+
+<Info>
+Adding collateral decreases your leverage proportionally, reducing your liquidation risk.
+</Info>
+
+### Removing Collateral
+
+Decrease your position's collateral to increase leverage:
+
+```move
+remove_collateral(
+    account: &signer,
+    position_id: u64,
+    collateral_amount: u64
+)
+```
+
+**Effects:**
+```
+new_collateral = old_collateral - removed_collateral  
+new_leverage = (old_leverage * old_collateral) / (new_collateral - 1)
+new_margin_value = (old_margin_value * new_collateral) / old_collateral
+```
+
+**Validation:**
+- New leverage must not exceed `max_leverage`
+- Must maintain minimum position requirements
+- Creates a pending order (executed by protocol)
+
+<Warning>
+Removing collateral is processed as an order and has a timeout. If conditions change (e.g., price moves against you), the order may be cancelled to prevent liquidation.
+</Warning>
+
+## Closing Positions
+
+### Full Close
+
+Close the entire position:
+
+```move
+create_market_close_order(
+    account: &signer,
+    position_id: u64,
+    target_price: BigDecimal,
+    max_slippage: BigDecimal,
+    collateral_close_amount: None  // None closes all
+)
+```
+
+### Partial Close
+
+Close a portion of your position:
+
+```move
+create_market_close_order(
+    account: &signer,
+    position_id: u64,
+    target_price: BigDecimal,
+    max_slippage: BigDecimal,
+    collateral_close_amount: Some(amount)  // Partial close
+)
+```
+
+**Partial Close Calculations:**
+```
+close_ratio = collateral_close_amount / total_collateral
+size_to_close = position_size * close_ratio
+margin_to_close = margin_value * close_ratio
+pnl = total_pnl * close_ratio
+fees = total_fees * close_ratio
+
+// Remaining position
+remaining_size = position_size - size_to_close
+remaining_collateral = total_collateral - collateral_close_amount
+remaining_margin = margin_value - margin_to_close
+```
+
+<Note>
+After a partial close, your leverage and open price remain unchanged. Only the position size and collateral decrease proportionally.
+</Note>
+
+## Position Updates
+
+### Updating TP/SL
+
+Modify take profit and stop loss prices:
+
+```move
+update_position(
+    account: &signer,
+    position_id: u64,
+    new_tp_price: BigDecimal,
+    new_sl_price: BigDecimal
+)
+```
+
+**TP/SL Validation:**
+- For longs: `tp_price > sl_price` (if both are non-zero)
+- For shorts: `tp_price < sl_price` (if both are non-zero)
+- Set to `0` to disable
+
+### Automatic TP Correction
+
+Take profit prices are automatically capped at the maximum PnL:
+
+```move
+max_tp_price = open_price + (open_price * max_pnl_ratio / leverage)  // Longs
+min_tp_price = open_price - (open_price * max_pnl_ratio / leverage)  // Shorts
+
+// TP is automatically adjusted if it exceeds max
+if (tp_price > max_tp_price) {
+    tp_price = max_tp_price  // For longs
+}
+```
+
+<Info>
+The protocol automatically adjusts your TP to the maximum allowed profit level if you set it too high.
+</Info>
+
+## Liquidation
+
+### Liquidation Threshold
+
+Positions are liquidated when equity falls below the liquidation margin:
+
+```move
+liquidation_margin = initial_collateral_value 
+                     * min(1, leverage / max_leverage) 
+                     * liquidation_threshold_ratio  // Default: 25%
+
+// Liquidated if:
+current_equity <= liquidation_margin
+```
+
+Where `current_equity = collateral_value + pnl - fees`
+
+### Liquidation Process
+
+1. **Detection:** Executors monitor positions and check liquidation conditions
+2. **Execution:** Position closed at current market price
+3. **Fees:** All remaining equity goes to liquidation fees
+4. **Settlement:** Vault receives the liquidation fee
+
+<Warning>
+When liquidated, you lose your entire collateral. The liquidation fee compensates the protocol for the risk of holding your position.
+</Warning>
+
+### Avoiding Liquidation
+
+Strategies to avoid liquidation:
+
+1. **Lower leverage:** Higher collateral = larger price buffer
+2. **Add collateral:** Increase margin when position moves against you
+3. **Set stop losses:** Automatically close before liquidation
+4. **Monitor fees:** Rollover and funding fees erode your margin over time
+
+## Position Queries
+
+### Get User Positions
+
+Retrieve all positions for a user:
+
+```move
+get_user_positions(
+    user_addr: address,
+    limit: u64,
+    key: Option<vector<u8>>  // Pagination cursor
+): PaginationResponse<PositionResponse>
+```
+
+### Get Position by ID
+
+```move
+get_position_by_id(position_id: u64): Position
+```
+
+### Check Position Exists
+
+```move
+check_positions_exists(position_ids: vector<u64>): vector<bool>
+```
+
+<Accordion title="Position Response Structure">
+```move
+struct PositionResponse {
+    position_id: u64,
+    asset_id: u64,
+    user_addr: address,
+    collateral_metadata: Object<Metadata>,
+    collateral_amount: u64,
+    open_price: BigDecimal,
+    tp_price: BigDecimal,
+    sl_price: BigDecimal,
+    initial_leverage: BigDecimal,
+    leverage: BigDecimal,
+    margin_value: BigDecimal,
+    last_updated_accumulated_rollover_fee_per_oi: String,
+    last_updated_accumulated_funding_fee_per_oi: String,
+    last_calculated_rollover_fee: String,
+    last_calculated_funding_fee: String,
+    size: BigDecimal,
+    is_long_position: bool
+}
+```
+</Accordion>
+
+## Best Practices
+
+<Tip>
+**Position Sizing:**
+- Start with lower leverage (2-5x) until familiar with the platform
+- Never risk more than 1-2% of your portfolio per trade
+- Account for fees when calculating profit targets
+</Tip>
+
+<Tip>
+**Risk Management:**
+- Always set stop losses, especially for high-leverage positions
+- Monitor your positions regularly during volatile markets
+- Keep extra collateral ready to add if needed
+- Understand that fees accumulate over time
+</Tip>
+
+<Tip>
+**Leverage Usage:**
+- Higher leverage = higher risk of liquidation
+- Consider overnight leverage limits for multi-day holds
+- Lower leverage allows for larger price movements
+- Max PnL caps make extreme leverage less profitable
+</Tip>

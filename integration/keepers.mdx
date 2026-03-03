@@ -1,0 +1,308 @@
+---
+title: Keeper Integration
+description: Learn how to run a keeper bot to execute orders and earn fees on Strat Perpetual DEX
+---
+
+This guide covers how to integrate as a keeper (order executor) to trigger order execution and earn execution fees.
+
+## Overview
+
+Keepers are permissionless bots that monitor pending orders and trigger their execution when conditions are met. Keepers interact with the `strat::order_executor` module to:
+- Execute market open orders
+- Execute market close orders
+- Execute automation orders (take profit, stop loss, liquidations)
+- Execute collateral removal orders
+
+## How Keepers Work
+
+<Steps>
+  <Step title="Monitor for Executable Orders">
+    Query the blockchain for pending orders that meet execution criteria:
+    - Market orders that are ready to execute
+    - Limit/stop orders where the price has been hit
+    - Positions that have reached TP/SL levels
+    - Positions that are eligible for liquidation
+  </Step>
+
+  <Step title="Execute Orders">
+    Call the appropriate execution function with fresh oracle prices.
+  </Step>
+
+  <Step title="Earn Execution Fees">
+    Receive fees for successful order execution (if configured in the protocol).
+  </Step>
+</Steps>
+
+## Executing Orders
+
+All execution functions are entry functions that can be called by anyone (permissionless).
+
+### Execute Open Order
+
+Execute a pending open order (market, limit, or stop).
+
+```move
+public entry fun execute_open_order(order_id: u64)
+```
+
+<ParamField path="order_id" type="u64" required>
+  ID of the order to execute
+</ParamField>
+
+**Location**: `strat::order_executor`
+
+**Execution Logic**:
+1. Fetches current asset and collateral prices from oracle
+2. Validates oracle freshness (within TTL)
+3. Validates oracle timestamp is after order creation
+4. Calls `order::execute_open_order` with prices
+5. Order is either executed or cancelled based on conditions
+
+### Execute Market Close Order
+
+Execute a pending market close order.
+
+```move
+public entry fun execute_market_close_order(order_id: u64)
+```
+
+<ParamField path="order_id" type="u64" required>
+  ID of the close order to execute
+</ParamField>
+
+**Location**: `strat::order_executor`
+
+**Execution Logic**:
+1. Fetches current prices from oracle
+2. Validates oracle freshness
+3. Closes position at current market price with spread adjustment
+4. Distributes PnL to trader and vault
+
+### Execute Automation Close Order
+
+Execute automated closes: take profit, stop loss, liquidation, or day trade close.
+
+```move
+public entry fun execute_automation_close_order(
+    position_id: u64,
+    close_type_index: u8
+)
+```
+
+<ParamField path="position_id" type="u64" required>
+  ID of the position to close
+</ParamField>
+
+<ParamField path="close_type_index" type="u8" required>
+  Close type: 0 = Take Profit, 1 = Stop Loss, 2 = Liquidate, 3 = Close Day Trade
+</ParamField>
+
+**Location**: `strat::order_executor`
+
+<Info>
+This function checks if the position exists before execution and returns early if not found (no error).
+</Info>
+
+### Execute Remove Collateral Order
+
+Execute an order to remove collateral from a position.
+
+```move
+public entry fun execute_remove_collateral(order_id: u64)
+```
+
+<ParamField path="order_id" type="u64" required>
+  ID of the remove collateral order
+</ParamField>
+
+**Location**: `strat::order_executor`
+
+## Oracle Requirements
+
+All executions require fresh oracle data:
+
+```move
+#[view]
+public fun get_oracle_ttl(): u64
+```
+
+Returns the maximum age (in seconds) for oracle data to be considered valid (default: 10 seconds).
+
+<Warning>
+Executions will fail if:
+- Oracle data is older than `oracle_ttl`
+- Oracle timestamp is before the order creation timestamp
+</Warning>
+
+## Querying Executable Orders
+
+Use these view functions to find orders ready for execution:
+
+### Check Order Existence
+
+```move
+#[view]
+public fun check_market_open_orders_exists(order_ids: vector<u64>): vector<bool>
+
+#[view]
+public fun check_limit_open_orders_exists(order_ids: vector<u64>): vector<bool>
+
+#[view]
+public fun check_stop_open_orders_exists(order_ids: vector<u64>): vector<bool>
+
+#[view]
+public fun check_market_close_orders_exists(order_ids: vector<u64>): vector<bool>
+
+#[view]
+public fun check_remove_collateral_orders_exists(order_ids: vector<u64>): vector<bool>
+```
+
+### Get Pending Orders
+
+```move
+#[view]
+public fun get_market_open_orders(
+    limit: u64,
+    key: Option<u64>
+): PaginationResponse<u64, OpenOrderResponse>
+
+#[view]
+public fun get_market_close_orders(
+    limit: u64,
+    key: Option<vector<u8>>
+): PaginationResponse<vector<u8>, CloseOrderResponse>
+
+#[view]
+public fun get_remove_collateral_orders(
+    limit: u64,
+    key: Option<vector<u8>>
+): PaginationResponse<vector<u8>, RemoveCollateralOrderResponse>
+```
+
+## Keeper Bot Implementation
+
+Here's a conceptual implementation of a keeper bot:
+
+```typescript
+class KeeperBot {
+  async monitorAndExecute() {
+    while (true) {
+      // 1. Query pending orders
+      const marketOrders = await this.getMarketOpenOrders();
+      const closeOrders = await this.getMarketCloseOrders();
+      const positions = await this.getLiquidatablePositions();
+      
+      // 2. Execute market orders
+      for (const order of marketOrders) {
+        if (await this.isExecutable(order)) {
+          await this.executeOpenOrder(order.order_id);
+        }
+      }
+      
+      // 3. Execute close orders
+      for (const order of closeOrders) {
+        if (await this.isExecutable(order)) {
+          await this.executeMarketCloseOrder(order.order_id);
+        }
+      }
+      
+      // 4. Execute liquidations and TP/SL
+      for (const position of positions) {
+        const closeType = await this.determineCloseType(position);
+        if (closeType !== null) {
+          await this.executeAutomationClose(position.id, closeType);
+        }
+      }
+      
+      // Wait before next cycle
+      await this.sleep(1000);
+    }
+  }
+  
+  async executeOpenOrder(orderId: number) {
+    try {
+      const tx = {
+        function: `${this.moduleAddress}::order_executor::execute_open_order`,
+        type_arguments: [],
+        arguments: [orderId]
+      };
+      
+      const result = await this.client.submitTransaction(tx);
+      console.log(`Executed order ${orderId}: ${result.hash}`);
+    } catch (error) {
+      console.error(`Failed to execute order ${orderId}:`, error);
+    }
+  }
+  
+  async determineCloseType(position: Position): number | null {
+    const currentPrice = await this.getCurrentPrice(position.asset_id);
+    
+    // Check take profit
+    if (position.is_long && currentPrice >= position.tp_price) {
+      return 0; // TakeProfit
+    }
+    if (!position.is_long && currentPrice <= position.tp_price) {
+      return 0;
+    }
+    
+    // Check stop loss
+    if (position.is_long && currentPrice <= position.sl_price) {
+      return 1; // StopLoss
+    }
+    if (!position.is_long && currentPrice >= position.sl_price) {
+      return 1;
+    }
+    
+    // Check liquidation
+    if (await this.isLiquidatable(position, currentPrice)) {
+      return 2; // Liquidate
+    }
+    
+    return null;
+  }
+}
+```
+
+## Best Practices
+
+1. **Monitor Gas Costs**: Ensure execution fees cover gas costs
+2. **Handle Failures Gracefully**: Orders may fail if already executed or conditions changed
+3. **Use Batch Queries**: Query multiple orders in a single call when possible
+4. **Prioritize High-Value Orders**: Focus on orders with higher execution fees
+5. **Monitor Oracle Health**: Ensure oracle data is fresh and reliable
+6. **Run Multiple Instances**: Use different RPC endpoints for redundancy
+7. **Implement Retry Logic**: Handle transient network errors
+
+## Error Handling
+
+Common execution errors:
+
+- `EORACLE_TTL`: Oracle data is stale
+- `EORDER_TIMESTAMP`: Oracle timestamp is before order creation
+- Order may already be executed by another keeper
+- Position may not meet execution conditions
+
+<Tip>
+Implement event monitoring to track successful executions by other keepers and avoid wasted gas on already-executed orders.
+</Tip>
+
+## Monitoring and Metrics
+
+Track these metrics for your keeper bot:
+
+- **Execution Success Rate**: Percentage of successful executions
+- **Average Execution Time**: Time from order becoming executable to execution
+- **Gas Efficiency**: Gas used per execution
+- **Revenue**: Total execution fees earned
+- **Competition**: Orders executed by other keepers
+
+## Configuration
+
+View the current oracle TTL configuration:
+
+```move
+#[view]
+public fun get_oracle_ttl(): u64
+```
+
+Returns the maximum age in seconds for oracle data (default: 10 seconds).

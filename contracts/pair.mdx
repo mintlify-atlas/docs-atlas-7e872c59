@@ -1,0 +1,309 @@
+---
+title: "Pair Module"
+description: "Trading pair management, open interest tracking, and fee configuration"
+---
+
+The `pair` module manages trading pairs in the Strat Perpetual DEX, including open interest tracking, fee configurations, funding fees, rollover fees, and dynamic spreads.
+
+## Core Data Structures
+
+### PairInfo
+
+Represents a trading pair with its configuration and state.
+
+<ResponseField name="asset_id" type="u64">
+  Unique identifier for the asset
+</ResponseField>
+
+<ResponseField name="group_key" type="GroupKey">
+  Reference to the group this pair belongs to
+</ResponseField>
+
+<ResponseField name="collateral_metadata" type="Object<Metadata>">
+  Metadata object for the collateral token
+</ResponseField>
+
+<ResponseField name="open_interest_long" type="BigDecimal">
+  Total notional value of long positions
+</ResponseField>
+
+<ResponseField name="open_interest_short" type="BigDecimal">
+  Total notional value of short positions
+</ResponseField>
+
+<ResponseField name="open_interest_cap" type="BigDecimal">
+  Maximum allowed open interest in USD value
+</ResponseField>
+
+<ResponseField name="last_trade_price" type="BigDecimal">
+  Most recent trade execution price
+</ResponseField>
+
+<ResponseField name="allow_extended_hours" type="bool">
+  Whether trading is allowed during extended market hours
+</ResponseField>
+
+<ResponseField name="max_leverage" type="BigDecimal">
+  Maximum leverage allowed for this pair
+</ResponseField>
+
+<ResponseField name="max_overnight_leverage" type="BigDecimal">
+  Maximum leverage allowed for overnight positions
+</ResponseField>
+
+<ResponseField name="min_position_value" type="BigDecimal">
+  Minimum position value (collateral amount × leverage)
+</ResponseField>
+
+<ResponseField name="maker_fee_rate" type="BigDecimal">
+  Fee rate for maker orders
+</ResponseField>
+
+<ResponseField name="taker_fee_rate" type="BigDecimal">
+  Fee rate for taker orders
+</ResponseField>
+
+<ResponseField name="vault_fee_rate" type="BigDecimal">
+  Portion of fees that go to the vault
+</ResponseField>
+
+### FundingFeeResponse
+
+Funding fee state for a trading pair.
+
+<ResponseField name="accumulated_per_oi_long" type="String">
+  Accumulated funding fee per unit of long open interest
+</ResponseField>
+
+<ResponseField name="accumulated_per_oi_short" type="String">
+  Accumulated funding fee per unit of short open interest
+</ResponseField>
+
+<ResponseField name="last_funding_rate_per_second" type="String">
+  Most recent funding rate per second
+</ResponseField>
+
+<ResponseField name="hill_inflection_point" type="String">
+  Inflection point for the hill function in funding rate calculation
+</ResponseField>
+
+<ResponseField name="max_funding_fee_rate_per_second" type="BigDecimal">
+  Maximum allowed funding fee rate per second
+</ResponseField>
+
+<ResponseField name="base_spring_factor" type="BigDecimal">
+  Base spring factor for funding rate convergence
+</ResponseField>
+
+<ResponseField name="spring_factor_up_scale" type="BigDecimal">
+  Multiplier when funding rate is increasing
+</ResponseField>
+
+<ResponseField name="spring_factor_down_scale" type="BigDecimal">
+  Multiplier when funding rate is decreasing
+</ResponseField>
+
+<ResponseField name="hill_positive_scale" type="BigDecimal">
+  Scale factor for positive side of the hill function
+</ResponseField>
+
+<ResponseField name="hill_negative_scale" type="BigDecimal">
+  Scale factor for negative side of the hill function
+</ResponseField>
+
+### RolloverFeeResponse
+
+Rollover fee state for a trading pair.
+
+<ResponseField name="accumulated_per_oi_long" type="String">
+  Accumulated rollover fee per unit of long open interest
+</ResponseField>
+
+<ResponseField name="accumulated_per_oi_short" type="String">
+  Accumulated rollover fee per unit of short open interest
+</ResponseField>
+
+<ResponseField name="last_pure_long_fee_rate_per_second" type="String">
+  Most recent pure long fee rate per second
+</ResponseField>
+
+<ResponseField name="broker_premium_rate_per_second" type="BigDecimal">
+  Broker premium rate added to the rollover fee
+</ResponseField>
+
+<ResponseField name="max_rollover_fee_rate_per_second" type="BigDecimal">
+  Maximum allowed rollover fee rate per second
+</ResponseField>
+
+<ResponseField name="is_negative_rollover_allowed" type="bool">
+  Whether negative rollover fees are permitted
+</ResponseField>
+
+### GetPairStateResponse
+
+Complete state of a trading pair including fees.
+
+<ResponseField name="pair_info" type="PairInfo">
+  Trading pair configuration and state
+</ResponseField>
+
+<ResponseField name="funding_fee" type="FundingFeeResponse">
+  Funding fee state
+</ResponseField>
+
+<ResponseField name="rollover_fee" type="RolloverFeeResponse">
+  Rollover fee state
+</ResponseField>
+
+## View Functions
+
+### get_pair_states
+
+Retrieves all trading pairs with pagination.
+
+```move
+#[view]
+public fun get_pair_states(
+    limit: u64,
+    key: Option<vector<u8>>
+): PaginationResponse<vector<u8>, GetPairStateResponse>
+```
+
+<ParamField path="limit" type="u64" required>
+  Maximum number of pairs to return
+</ParamField>
+
+<ParamField path="key" type="Option<vector<u8>>">
+  Pagination cursor for the next page
+</ParamField>
+
+### get_pair_state
+
+Retrieves the complete state of a specific trading pair.
+
+```move
+#[view]
+public fun get_pair_state(
+    asset_id: u64,
+    collateral_metadata: Object<Metadata>
+): GetPairStateResponse
+```
+
+<ParamField path="asset_id" type="u64" required>
+  Asset identifier for the trading pair
+</ParamField>
+
+<ParamField path="collateral_metadata" type="Object<Metadata>" required>
+  Collateral token metadata
+</ParamField>
+
+### get_execution_price
+
+Calculates execution price after applying dynamic spread.
+
+```move
+#[view]
+public fun get_execution_price(
+    asset_id: u64,
+    collateral_metadata: Object<Metadata>,
+    price: BigDecimal,
+    size: BigDecimal,
+    is_buy: bool
+): BigDecimal
+```
+
+<ParamField path="asset_id" type="u64" required>
+  Asset identifier
+</ParamField>
+
+<ParamField path="collateral_metadata" type="Object<Metadata>" required>
+  Collateral token metadata
+</ParamField>
+
+<ParamField path="price" type="BigDecimal" required>
+  Base oracle price
+</ParamField>
+
+<ParamField path="size" type="BigDecimal" required>
+  Trade size
+</ParamField>
+
+<ParamField path="is_buy" type="bool" required>
+  Whether this is a buy order
+</ParamField>
+
+## Entry Functions
+
+### update_rollover_fee_per_second
+
+Updates the rollover fee rate for a trading pair. Can only be called by authorized fee feeders.
+
+```move
+public entry fun update_rollover_fee_per_second(
+    feeder: &signer,
+    asset_id: u64,
+    collateral_metadata: Object<Metadata>,
+    pure_long_fee_rate_per_second: BigDecimal,
+    is_pure_long_fee_rate_per_second_positive: bool
+)
+```
+
+<ParamField path="feeder" type="&signer" required>
+  Authorized rollover fee feeder account
+</ParamField>
+
+<ParamField path="asset_id" type="u64" required>
+  Asset identifier
+</ParamField>
+
+<ParamField path="collateral_metadata" type="Object<Metadata>" required>
+  Collateral token metadata
+</ParamField>
+
+<ParamField path="pure_long_fee_rate_per_second" type="BigDecimal" required>
+  New pure long fee rate per second
+</ParamField>
+
+<ParamField path="is_pure_long_fee_rate_per_second_positive" type="bool" required>
+  Sign of the fee rate (true = positive, false = negative)
+</ParamField>
+
+## Public Functions
+
+### get_pair_info
+
+Retrieves pair information for a given asset and collateral.
+
+```move
+public fun get_pair_info(
+    asset_id: u64,
+    collateral_metadata: Object<Metadata>
+): PairInfo
+```
+
+<ParamField path="asset_id" type="u64" required>
+  Asset identifier
+</ParamField>
+
+<ParamField path="collateral_metadata" type="Object<Metadata>" required>
+  Collateral token metadata
+</ParamField>
+
+### check_pair_exists
+
+Verifies that a trading pair exists.
+
+```move
+public fun check_pair_exists(
+    asset_id: u64,
+    collateral_metadata: Object<Metadata>
+)
+```
+
+<ParamField path="asset_id" type="u64" required>
+  Asset identifier
+</ParamField>
+
+<ParamField path="collateral_metadata" type="Object<Metadata>" required>
+  Collateral token metadata
+</ParamField>

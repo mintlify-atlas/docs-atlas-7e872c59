@@ -1,0 +1,96 @@
+---
+title: Introduction
+description: Welcome to Strat Perpetual DEX - A modular decentralized perpetual exchange built on Initia
+---
+
+# Welcome to Strat Perpetual DEX
+
+Strat Perpetual DEX is a **decentralized perpetual exchange** built on the Initia blockchain using Move smart contracts. The system features a modular architecture where each contract focuses on a single responsibility, working together to provide comprehensive perpetual trading functionality.
+
+<Note>
+  Strat leverages Move's security and expressiveness to deliver a robust, gas-efficient perpetual trading platform with advanced features like dynamic spreads, funding rates, and automated liquidity management.
+</Note>
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Modular Architecture" icon="cubes" href="/architecture">
+    Clean separation of concerns with dedicated contracts for governance, orders, positions, vault, and oracles
+  </Card>
+  
+  <Card title="Advanced Order Types" icon="list-check">
+    Support for market, limit, and stop orders with take-profit and stop-loss automation
+  </Card>
+  
+  <Card title="Dynamic Pricing" icon="chart-line">
+    Dynamic spreads that adjust based on trading volume and market conditions
+  </Card>
+  
+  <Card title="Liquidity Vault" icon="vault">
+    LP token-based liquidity provision with fee collection and PnL management
+  </Card>
+  
+  <Card title="Oracle Aggregation" icon="satellite-dish">
+    Multi-source oracle aggregation with Stork integration for reliable price feeds
+  </Card>
+  
+  <Card title="Referral System" icon="users">
+    Built-in referral tracking to incentivize user growth
+  </Card>
+</CardGroup>
+
+## Quick Navigation
+
+<CardGroup cols={2}>
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Get started building and testing the contracts
+  </Card>
+  
+  <Card title="Architecture" icon="sitemap" href="/architecture">
+    Understand the modular contract structure
+  </Card>
+</CardGroup>
+
+## Core Modules
+
+The Strat Perpetual DEX consists of several interconnected modules:
+
+### Governance (`gov`)
+Centralized configuration management for all modules. Handles parameter updates, trading pair registration, and system-wide settings.
+
+### Order Management (`order`)
+Primary interface for traders to create, cancel, and modify orders. Manages user collateral during active trades and coordinates with other modules for order execution.
+
+### Position Tracking (`position`)
+Maintains all open positions with accurate state tracking. Provides position-related calculations including PnL, leverage, and margin requirements.
+
+### Vault (`vault`)
+Collateral and liquidity provider contract. Manages LP tokens, collects fees from trades and liquidations, and handles the economic balance between traders and LPs.
+
+### Oracle Aggregator (`oracle_aggregator`)
+Fetches and normalizes price data from multiple oracle sources including Stork. Ensures consistent pricing across the entire system.
+
+### Order Executor (`order_executor`)
+Designed for keeper bots to execute pending orders when conditions are met. Handles the automated settlement of trades.
+
+## Economic Model
+
+<Info>
+  The vault economics work as follows:
+  - **Revenue Sources**: Liquidation fees, opening fees, and negative trader PnL
+  - **Positive Net PnL**: When traders profit, LP token price decreases
+  - **Negative Net PnL**: When traders lose, LP token price remains stable (LPs profit)
+</Info>
+
+## Technology Stack
+
+- **Blockchain**: Initia (Move-based)
+- **Language**: Move
+- **Oracles**: Stork Oracle integration
+- **Dependencies**: InitiaStdlib for core functionality
+
+## Getting Started
+
+Ready to build? Check out our [Quick Start Guide](/quickstart) to set up your development environment and run tests.
+
+For a deeper understanding of how the modules interact, visit the [Architecture Overview](/architecture).

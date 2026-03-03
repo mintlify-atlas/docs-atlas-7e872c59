@@ -1,0 +1,307 @@
+---
+title: "Trading"
+description: "Learn how trading works on Strat, including order types, execution, and spread mechanics"
+---
+
+## Overview
+
+Strat supports perpetual futures trading with three order types: market, limit, and stop orders. All orders are executed off-chain by authorized executors, with prices determined by oracle feeds and dynamic spreads.
+
+## Order Types
+
+### Market Orders
+
+Market orders execute immediately at the current oracle price, adjusted for spreads.
+
+**Key Features:**
+- Immediate execution (subject to executor processing)
+- Max slippage protection
+- Default timeout: 60 seconds
+- Opening fee split between protocol and vault
+
+```move
+create_market_open_order(
+    account: &signer,
+    asset_id: u64,
+    collateral_metadata: Object<Metadata>,
+    collateral_amount: u64,
+    target_price: BigDecimal,
+    tp_price: BigDecimal,      // Take profit price
+    sl_price: BigDecimal,      // Stop loss price
+    leverage: BigDecimal,
+    is_long_position: bool,
+    max_slippage: BigDecimal   // Maximum acceptable slippage
+)
+```
+
+<Warning>
+Market orders can be cancelled if they time out (default 60 seconds) or if slippage exceeds the `max_slippage` parameter.
+</Warning>
+
+### Limit Orders
+
+Limit orders execute when the oracle price reaches the specified target price.
+
+**Execution Conditions:**
+- **Long positions:** Execute when `price_after_spread <= target_price`
+- **Short positions:** Execute when `price_after_spread >= target_price`
+
+```move
+create_limit_open_order(
+    account: &signer,
+    asset_id: u64,
+    collateral_metadata: Object<Metadata>,
+    collateral_amount: u64,
+    target_price: BigDecimal,  // Price at which to execute
+    tp_price: BigDecimal,
+    sl_price: BigDecimal,
+    leverage: BigDecimal,
+    is_long_position: bool
+)
+```
+
+<Info>
+Limit orders use the price after spread for trigger checks, ensuring you get executed at or better than your target price.
+</Info>
+
+### Stop Orders
+
+Stop orders trigger when the market price crosses the target price, useful for entering positions on breakouts.
+
+**Execution Conditions:**
+- **Long positions:** Execute when `market_price >= target_price`
+- **Short positions:** Execute when `market_price <= target_price`
+
+```move
+create_stop_open_order(
+    account: &signer,
+    asset_id: u64,
+    collateral_metadata: Object<Metadata>,
+    collateral_amount: u64,
+    target_price: BigDecimal,  // Trigger price
+    tp_price: BigDecimal,
+    sl_price: BigDecimal,
+    leverage: BigDecimal,
+    is_long_position: bool
+)
+```
+
+<Note>
+Stop orders use the raw market price (before spread) for triggering, then execute at the spread-adjusted price.
+</Note>
+
+## Price Execution & Spreads
+
+### Dynamic Spread Mechanism
+
+Strat uses a dynamic spread system that adjusts based on trading volume imbalance. This helps manage risk and maintain market stability.
+
+**Spread Calculation:**
+
+```
+spread_ratio = max_spread_ratio * (imbalance / max_imbalance)²
+execution_price = oracle_price * (1 ± spread_ratio)
+```
+
+Where:
+- `imbalance = buy_volume - sell_volume - volume_threshold`
+- `max_imbalance = 2 * open_interest_cap`
+- Volumes decay over time using exponential decay
+
+**Buy vs Sell:**
+- **Opening long / Closing short:** Adds spread (pay higher price)
+- **Opening short / Closing long:** Subtracts spread (receive lower price)
+
+<Accordion title="Dynamic Spread Details">
+The spread system tracks time-weighted buy and sell volumes:
+
+1. **Volume Decay:** Volumes decay exponentially using rate `r`:
+   ```
+   decayed_volume = volume * e^(-r*t)
+   ```
+
+2. **Imbalance Threshold:** Only volume exceeding the threshold contributes to spread
+
+3. **Quadratic Scaling:** Spread increases quadratically with imbalance, making large directional trades more expensive
+
+4. **Zero Spread Conditions:**
+   - Trade reduces imbalance magnitude
+   - Imbalance is below the threshold
+   - Max spread ratio is set to zero
+</Accordion>
+
+### Maker vs Taker Fees
+
+Strat implements a maker-taker fee model to encourage balanced markets:
+
+**Fee Determination:**
+- **Maker orders:** Reduce open interest imbalance (lower fee)
+- **Taker orders:** Increase open interest imbalance (higher fee)
+
+```move
+// Opening fee calculation
+if (position reduces OI imbalance) {
+    maker_portion = min(position_value, abs(oi_delta))
+    taker_portion = position_value - maker_portion
+} else {
+    maker_portion = 0
+    taker_portion = position_value
+}
+
+total_fee = maker_fee_rate * maker_portion + taker_fee_rate * taker_portion
+```
+
+**Fee Distribution:**
+- Protocol receives: `total_fee * (1 - vault_fee_rate)`
+- Vault receives: `total_fee * vault_fee_rate`
+
+<Tip>
+To minimize fees, trade in the direction that reduces open interest imbalance. Check the current OI delta before placing large orders.
+</Tip>
+
+## Order Management
+
+### Updating Orders
+
+Limit and stop orders can be updated while pending:
+
+```move
+update_open_order(
+    account: &signer,
+    order_id: u64,
+    target_price: BigDecimal,  // New target price
+    tp_price: BigDecimal,      // New take profit
+    sl_price: BigDecimal       // New stop loss
+)
+```
+
+<Warning>
+Market orders cannot be updated. You must cancel and create a new order.
+</Warning>
+
+### Cancelling Orders
+
+Users can cancel their pending orders:
+
+```move
+cancel_open_order(account: &signer, order_id: u64)
+```
+
+**Cancellation Rules:**
+- Market orders: Can only cancel after timeout (60s)
+- Limit/Stop orders: Can cancel anytime
+- Collateral is refunded upon cancellation
+
+### Automatic Cancellation
+
+Orders may be automatically cancelled if:
+- **Slippage:** Execution price exceeds max slippage (market orders)
+- **Not Hit:** Price hasn't reached target (limit/stop orders)
+- **Exposure Limits:** Would exceed open interest cap
+- **Leverage Limits:** Would violate max leverage constraints
+- **Market Closed:** Trading outside allowed hours (if extended hours disabled)
+- **Liquidation:** Position would be immediately liquidatable
+- **Max PnL:** Would exceed maximum PnL per token limits
+
+## Closing Positions
+
+### Market Close Orders
+
+Close positions at the current market price:
+
+```move
+create_market_close_order(
+    account: &signer,
+    position_id: u64,
+    target_price: BigDecimal,
+    max_slippage: BigDecimal,
+    collateral_close_amount: Option<u64>  // None = close all
+)
+```
+
+**Partial Closes:**
+- Specify `collateral_close_amount` to close a portion
+- Size closed proportionally: `close_ratio = collateral_close / total_collateral`
+- Minimum position size requirements still apply
+
+<Info>
+When closing a position, the spread works in your favor compared to opening - you buy at a lower price (closing shorts) or sell at a higher price (closing longs).
+</Info>
+
+### Automated Closes
+
+Positions can be automatically closed by the protocol:
+
+1. **Take Profit:** Price reaches `tp_price`
+2. **Stop Loss:** Price reaches `sl_price`
+3. **Liquidation:** Position becomes undercollateralized
+4. **Day Trade Close:** High-leverage positions closed during wind-down period
+
+## Order Execution Flow
+
+<Accordion title="1. Order Creation">
+1. User submits order with collateral
+2. Collateral withdrawn from user's wallet
+3. Order stored in contract state
+4. Order indexed by type and user
+</Accordion>
+
+<Accordion title="2. Order Execution">
+1. Off-chain executor monitors pending orders
+2. Executor fetches oracle prices
+3. Checks execution conditions and limits
+4. Calls `execute_open_order` with oracle price
+5. Contract validates price and calculates spread
+6. Position created or order cancelled with reason
+</Accordion>
+
+<Accordion title="3. Position Settlement">
+1. Opening fee calculated (maker/taker split)
+2. Fee distributed to protocol and vault
+3. Position added to user's account
+4. Open interest and group collateral updated
+5. Dynamic spread volumes updated
+6. Events emitted for indexing
+</Accordion>
+
+## Market Hours
+
+Pairs can optionally restrict trading to market hours:
+
+- **Extended Hours Allowed:** Trade 24/7
+- **Extended Hours Disabled:** Trading only during asset's market hours
+- **Wind-Down Window:** High-leverage positions must close before market close
+
+<Warning>
+Positions with leverage exceeding the overnight leverage limit must be closed during the wind-down window (default 30 minutes before market close), or they will be automatically closed.
+</Warning>
+
+## Position Limits
+
+### Leverage Limits
+
+- **Min Leverage:** 1x (no leverage)
+- **Max Leverage:** Per-pair setting (e.g., 50x for crypto, 20x for forex)
+- **Max Overnight Leverage:** Lower limit for positions held overnight (e.g., 10x)
+
+### Size Limits
+
+- **Min Position Value:** `collateral * leverage >= min_position_value`
+- **Open Interest Cap:** Total open interest cannot exceed per-pair cap
+- **Group Collateral:** Total collateral per group limited by vault balance
+
+### Validation
+
+All limits are checked both at order creation and execution time:
+
+```move
+// Example validation checks
+assert!(leverage >= min_leverage && leverage <= max_leverage);
+assert!(position_value >= min_position_value);
+assert!(new_open_interest <= open_interest_cap);
+assert!(group_collateral_used <= max_group_collateral);
+```
+
+<Note>
+Limits can change between order submission and execution. If limits are violated at execution time, the order is cancelled and collateral refunded.
+</Note>

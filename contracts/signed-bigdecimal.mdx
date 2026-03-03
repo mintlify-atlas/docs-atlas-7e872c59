@@ -1,0 +1,423 @@
+---
+title: Signed BigDecimal Library
+description: Math library for signed decimal arithmetic operations
+---
+
+The signed_bigdecimal module provides a comprehensive library for working with signed decimal numbers. It wraps the standard BigDecimal type to add support for negative values and provides a full suite of arithmetic and comparison operations.
+
+## Overview
+
+This library is essential for financial calculations in the perpetual DEX where positions can have both positive and negative values (profits and losses, long and short positions, etc.).
+
+## Data Structure
+
+### SignedBigDecimal
+
+```move
+struct SignedBigDecimal has copy, drop, store {
+    magnitude: BigDecimal,
+    is_positive: bool
+}
+```
+
+A signed decimal number represented by:
+- `magnitude`: The absolute value as a BigDecimal
+- `is_positive`: Sign flag (true for positive/zero, false for negative)
+
+**Note**: Zero is always represented with `is_positive = true`
+
+## Constructor Functions
+
+### new
+
+Create a new signed decimal from magnitude and sign.
+
+```move
+public fun new(magnitude: BigDecimal, is_positive: bool): SignedBigDecimal
+```
+
+<ParamField path="magnitude" type="BigDecimal">
+  The absolute value
+</ParamField>
+
+<ParamField path="is_positive" type="bool">
+  True for positive, false for negative
+</ParamField>
+
+**Note**: If magnitude is zero, is_positive is automatically set to true
+
+### zero
+
+Create a signed decimal representing zero.
+
+```move
+public fun zero(): SignedBigDecimal
+```
+
+### one
+
+Create a signed decimal representing positive one.
+
+```move
+public fun one(): SignedBigDecimal
+```
+
+### from_bigdecimal
+
+Create a positive signed decimal from a BigDecimal.
+
+```move
+public fun from_bigdecimal(val: BigDecimal): SignedBigDecimal
+```
+
+<ParamField path="val" type="BigDecimal">
+  The value to convert (treated as positive)
+</ParamField>
+
+### from_u64
+
+Create a positive signed decimal from a u64 integer.
+
+```move
+public fun from_u64(val: u64): SignedBigDecimal
+```
+
+<ParamField path="val" type="u64">
+  The integer value to convert
+</ParamField>
+
+## Accessor Functions
+
+### magnitude
+
+Get the magnitude (absolute value).
+
+```move
+public fun magnitude(self: &SignedBigDecimal): BigDecimal
+```
+
+### is_positive
+
+Check if the value is positive (or zero).
+
+```move
+public fun is_positive(self: &SignedBigDecimal): bool
+```
+
+### unpack
+
+Extract both magnitude and sign.
+
+```move
+public fun unpack(self: &SignedBigDecimal): (BigDecimal, bool)
+```
+
+**Returns**: Tuple of (magnitude, is_positive)
+
+## Sign Operations
+
+### negate
+
+Flip the sign of the value.
+
+```move
+public fun negate(self: &SignedBigDecimal): SignedBigDecimal
+```
+
+**Example**: -5.5 becomes 5.5, 3.2 becomes -3.2
+
+### abs
+
+Get the absolute value (always positive).
+
+```move
+public fun abs(self: &SignedBigDecimal): SignedBigDecimal
+```
+
+## Comparison Functions
+
+### lt (less than)
+
+```move
+public fun lt(self: &SignedBigDecimal, other: &SignedBigDecimal): bool
+```
+
+<ParamField path="self" type="&SignedBigDecimal">
+  First value
+</ParamField>
+
+<ParamField path="other" type="&SignedBigDecimal">
+  Second value
+</ParamField>
+
+**Returns**: True if self < other
+
+### le (less than or equal)
+
+```move
+public fun le(self: &SignedBigDecimal, other: &SignedBigDecimal): bool
+```
+
+**Returns**: True if self ≤ other
+
+### gt (greater than)
+
+```move
+public fun gt(self: &SignedBigDecimal, other: &SignedBigDecimal): bool
+```
+
+**Returns**: True if self > other
+
+### ge (greater than or equal)
+
+```move
+public fun ge(self: &SignedBigDecimal, other: &SignedBigDecimal): bool
+```
+
+**Returns**: True if self >= other
+
+### eq (equal)
+
+```move
+public fun eq(self: &SignedBigDecimal, other: &SignedBigDecimal): bool
+```
+
+**Returns**: True if self == other (both magnitude and sign match)
+
+### min
+
+Get the minimum of two values.
+
+```move
+public fun min(self: &SignedBigDecimal, other: &SignedBigDecimal): SignedBigDecimal
+```
+
+### max
+
+Get the maximum of two values.
+
+```move
+public fun max(self: &SignedBigDecimal, other: &SignedBigDecimal): SignedBigDecimal
+```
+
+## Arithmetic Operations
+
+### add
+
+Add two signed decimals.
+
+```move
+public fun add(self: &SignedBigDecimal, other: &SignedBigDecimal): SignedBigDecimal
+```
+
+<ParamField path="self" type="&SignedBigDecimal">
+  First operand
+</ParamField>
+
+<ParamField path="other" type="&SignedBigDecimal">
+  Second operand
+</ParamField>
+
+**Logic**:
+- Same sign: Add magnitudes, keep sign
+- Different signs: Subtract smaller from larger, use sign of larger
+- Equal magnitudes with different signs: Return zero
+
+### add_by_bigdecimal
+
+Add a positive BigDecimal to a signed decimal.
+
+```move
+public fun add_by_bigdecimal(
+    self: &SignedBigDecimal,
+    other: &BigDecimal
+): SignedBigDecimal
+```
+
+<ParamField path="self" type="&SignedBigDecimal">
+  Signed decimal operand
+</ParamField>
+
+<ParamField path="other" type="&BigDecimal">
+  Positive decimal to add
+</ParamField>
+
+### sub
+
+Subtract two signed decimals.
+
+```move
+public fun sub(self: &SignedBigDecimal, other: &SignedBigDecimal): SignedBigDecimal
+```
+
+**Implementation**: Equivalent to `self.add(&other.negate())`
+
+### sub_by_bigdecimal
+
+Subtract a positive BigDecimal from a signed decimal.
+
+```move
+public fun sub_by_bigdecimal(
+    self: &SignedBigDecimal,
+    other: &BigDecimal
+): SignedBigDecimal
+```
+
+### mul
+
+Multiply two signed decimals.
+
+```move
+public fun mul(self: &SignedBigDecimal, other: &SignedBigDecimal): SignedBigDecimal
+```
+
+**Sign rules**:
+- Positive * Positive = Positive
+- Positive * Negative = Negative
+- Negative * Positive = Negative
+- Negative * Negative = Positive
+
+### mul_by_bigdecimal
+
+Multiply by a positive BigDecimal.
+
+```move
+public fun mul_by_bigdecimal(
+    self: &SignedBigDecimal,
+    other: &BigDecimal
+): SignedBigDecimal
+```
+
+**Note**: Preserves sign of self
+
+### mul_by_u64
+
+Multiply by a u64 integer.
+
+```move
+public fun mul_by_u64(self: &SignedBigDecimal, other: u64): SignedBigDecimal
+```
+
+### mul_by_u128
+
+Multiply by a u128 integer.
+
+```move
+public fun mul_by_u128(self: &SignedBigDecimal, other: u128): SignedBigDecimal
+```
+
+### div
+
+Divide two signed decimals.
+
+```move
+public fun div(self: &SignedBigDecimal, other: &SignedBigDecimal): SignedBigDecimal
+```
+
+**Sign rules**: Same as multiplication
+
+### div_by_bigdecimal
+
+Divide by a positive BigDecimal.
+
+```move
+public fun div_by_bigdecimal(
+    self: &SignedBigDecimal,
+    other: &BigDecimal
+): SignedBigDecimal
+```
+
+### div_by_u64
+
+Divide by a u64 integer.
+
+```move
+public fun div_by_u64(self: &SignedBigDecimal, other: u64): SignedBigDecimal
+```
+
+### div_by_u128
+
+Divide by a u128 integer.
+
+```move
+public fun div_by_u128(self: &SignedBigDecimal, other: u128): SignedBigDecimal
+```
+
+## Conversion Functions
+
+### to_string
+
+Convert to string representation.
+
+```move
+public fun to_string(self: &SignedBigDecimal): String
+```
+
+**Format**:
+- Positive: "0.5", "123.456"
+- Negative: "-0.5", "-123.456"
+- Zero: "0"
+
+### to_bigdecimal
+
+Convert to unsigned BigDecimal.
+
+```move
+public fun to_bigdecimal(self: &SignedBigDecimal): BigDecimal
+```
+
+**Requirements**: Value must be non-negative (is_positive must be true)
+
+**Aborts**: If value is negative with error `ENOT_POSITIVE`
+
+## Usage Examples
+
+### Basic Arithmetic
+
+```move
+let a = from_u64(5);        // 5
+let b = from_u64(3);        // 3
+let c = a.add(&b);          // 8
+let d = a.sub(&b);          // 2
+let e = a.mul(&b);          // 15
+let f = a.div(&b);          // 1.666...
+```
+
+### Working with Negative Numbers
+
+```move
+let positive = from_u64(10);           // 10
+let negative = positive.negate();       // -10
+let sum = positive.add(&negative);      // 0
+let diff = positive.sub(&negative);     // 20
+```
+
+### Comparison
+
+```move
+let a = from_u64(5);
+let b = from_u64(3).negate();  // -3
+
+assert!(a.gt(&b), 0);   // 5 > -3
+assert!(b.lt(&zero()), 0);     // -3 < 0
+```
+
+### Min/Max
+
+```move
+let a = from_u64(5);
+let b = from_u64(3).negate();
+let minimum = a.min(&b);  // -3
+let maximum = a.max(&b);  // 5
+```
+
+## Error Codes
+
+- `ENOT_POSITIVE (1)`: Attempted to convert negative value to unsigned BigDecimal
+
+## Implementation Notes
+
+1. **Zero Normalization**: Zero is always stored with `is_positive = true` to ensure consistency
+2. **Precision**: Inherits precision from the underlying BigDecimal type
+3. **No Overflow**: Uses BigDecimal internally, so no overflow concerns for typical use cases
+4. **Immutable**: All operations return new values rather than modifying in place

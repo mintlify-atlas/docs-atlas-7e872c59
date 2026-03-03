@@ -1,0 +1,506 @@
+---
+title: "Governance Module"
+description: "Central governance module for managing configuration and protocol settings"
+---
+
+The `gov` module serves as the central governance interface for the Strat Perpetual DEX. It manages all configuration updates, pair listings, oracle settings, and protocol-level administrative functions.
+
+## Module Structure
+
+```move
+struct ModuleStore has key {
+    gov_address: address,
+    protocol_fee_address: address,
+    order_executor_capability: OrderExecutorCapability,
+    order_capability: OrderCapability,
+    oracle_aggregator_capability: OACapability,
+    pair_capability: PairCapability,
+    position_capability: PositionCapability,
+    vault_capability: VaultCapability,
+    referral_capability: ReferralCapability
+}
+```
+
+The governance module stores capabilities for all protocol modules, enabling centralized administration.
+
+## Order Configuration
+
+### update_order_config
+
+Updates global order module configuration parameters.
+
+```move
+public entry fun update_order_config(
+    account: &signer,
+    market_timeout: u64,
+    wind_down_window: u64
+)
+```
+
+<ParamField path="account" type="&signer" required>
+  Governance account signer
+</ParamField>
+
+<ParamField path="market_timeout" type="u64" required>
+  Timeout duration for market orders in seconds
+</ParamField>
+
+<ParamField path="wind_down_window" type="u64" required>
+  Window before market close when positions exceeding overnight leverage can be closed (in seconds)
+</ParamField>
+
+## Protocol Fee Management
+
+### update_protocol_fee_address
+
+Updates the protocol fee recipient address.
+
+```move
+public entry fun update_protocol_fee_address(
+    account: &signer,
+    new_address: address
+)
+```
+
+<ParamField path="account" type="&signer" required>
+  Protocol fee address or governance account signer
+</ParamField>
+
+<ParamField path="new_address" type="address" required>
+  New address to receive protocol fees
+</ParamField>
+
+### withdraw_protocol_fee
+
+Withdraws accumulated protocol fees.
+
+```move
+public entry fun withdraw_protocol_fee(
+    account: &signer,
+    collateral_metadata: Object<Metadata>,
+    amount: u64,
+    to: address
+)
+```
+
+<ParamField path="account" type="&signer" required>
+  Protocol fee address or governance account signer
+</ParamField>
+
+<ParamField path="collateral_metadata" type="Object<Metadata>" required>
+  Metadata object for the collateral token
+</ParamField>
+
+<ParamField path="amount" type="u64" required>
+  Amount of fees to withdraw
+</ParamField>
+
+<ParamField path="to" type="address" required>
+  Recipient address for the withdrawn fees
+</ParamField>
+
+## Oracle Configuration
+
+### upsert_asset_oracle
+
+Creates or updates an oracle configuration for a trading asset.
+
+```move
+public entry fun upsert_asset_oracle(
+    account: &signer,
+    asset_id: Option<u64>,
+    symbol: String,
+    oracle_type_index: u8,
+    oracle_id: vector<u8>,
+    market_status_oracle_type_index: Option<u8>,
+    market_status_oracle_ids: Option<vector<vector<u8>>>
+)
+```
+
+<ParamField path="account" type="&signer" required>
+  Governance account signer
+</ParamField>
+
+<ParamField path="asset_id" type="Option<u64>" required>
+  Asset ID (None for creating new asset)
+</ParamField>
+
+<ParamField path="symbol" type="String" required>
+  Asset symbol (e.g., "BTC", "ETH")
+</ParamField>
+
+<ParamField path="oracle_type_index" type="u8" required>
+  Index representing the oracle type
+</ParamField>
+
+<ParamField path="oracle_id" type="vector<u8>" required>
+  Oracle identifier bytes
+</ParamField>
+
+<ParamField path="market_status_oracle_type_index" type="Option<u8>">
+  Optional oracle type index for market status
+</ParamField>
+
+<ParamField path="market_status_oracle_ids" type="Option<vector<vector<u8>>>">
+  Optional oracle IDs for market status checking
+</ParamField>
+
+### upsert_collateral_oracle
+
+Creates or updates an oracle configuration for a collateral token.
+
+```move
+public entry fun upsert_collateral_oracle(
+    account: &signer,
+    collateral_metadata: Object<Metadata>,
+    symbol: String,
+    oracle_type_index: u8,
+    oracle_id: vector<u8>
+)
+```
+
+<ParamField path="account" type="&signer" required>
+  Governance account signer
+</ParamField>
+
+<ParamField path="collateral_metadata" type="Object<Metadata>" required>
+  Metadata object for the collateral token
+</ParamField>
+
+<ParamField path="symbol" type="String" required>
+  Collateral symbol (e.g., "USDC", "USDT")
+</ParamField>
+
+<ParamField path="oracle_type_index" type="u8" required>
+  Index representing the oracle type
+</ParamField>
+
+<ParamField path="oracle_id" type="vector<u8>" required>
+  Oracle identifier bytes
+</ParamField>
+
+### update_market_status_transition_buffers
+
+Configures buffer periods around market status transitions.
+
+```move
+public entry fun update_market_status_transition_buffers(
+    account: &signer,
+    pre_market_status_transition_buffer: u64,
+    post_market_status_transition_buffer: u64
+)
+```
+
+<ParamField path="account" type="&signer" required>
+  Governance account signer
+</ParamField>
+
+<ParamField path="pre_market_status_transition_buffer" type="u64" required>
+  Buffer time before market status transitions (in seconds)
+</ParamField>
+
+<ParamField path="post_market_status_transition_buffer" type="u64" required>
+  Buffer time after market status transitions (in seconds)
+</ParamField>
+
+## Order Executor Configuration
+
+### update_oracle_ttl
+
+Sets the time-to-live for oracle price feeds.
+
+```move
+public entry fun update_oracle_ttl(
+    account: &signer,
+    oracle_ttl: u64
+)
+```
+
+<ParamField path="account" type="&signer" required>
+  Governance account signer
+</ParamField>
+
+<ParamField path="oracle_ttl" type="u64" required>
+  Maximum age of oracle prices in seconds
+</ParamField>
+
+## Pair Management
+
+### register_pair
+
+Registers a new trading pair with comprehensive configuration.
+
+```move
+public entry fun register_pair(
+    account: &signer,
+    asset_id: u64,
+    group_name: String,
+    collateral_metadata: Object<Metadata>,
+    // pair configs
+    open_interest_cap: BigDecimal,
+    allow_extended_hours: bool,
+    max_leverage: BigDecimal,
+    max_overnight_leverage: BigDecimal,
+    min_position_value: BigDecimal,
+    maker_fee_rate: BigDecimal,
+    taker_fee_rate: BigDecimal,
+    vault_fee_rate: BigDecimal,
+    // funding fee configs
+    hill_inflection_point_magnitude: BigDecimal,
+    hill_inflection_point_is_positive: bool,
+    max_funding_fee_rate_per_second: BigDecimal,
+    base_spring_factor: BigDecimal,
+    spring_factor_up_scale: BigDecimal,
+    spring_factor_down_scale: BigDecimal,
+    hill_positive_scale: BigDecimal,
+    hill_negative_scale: BigDecimal,
+    // rollover fee configs
+    max_rollover_fee_rate_per_second: BigDecimal,
+    broker_premium_rate_per_second: BigDecimal,
+    is_negative_rollover_allowed: bool,
+    // dynamic spread configs
+    max_spread_ratio: BigDecimal,
+    spread_volume_threshold: BigDecimal,
+    spread_decay_rate: BigDecimal
+)
+```
+
+<ParamField path="account" type="&signer" required>
+  Governance account signer
+</ParamField>
+
+<ParamField path="asset_id" type="u64" required>
+  Unique identifier for the trading asset
+</ParamField>
+
+<ParamField path="group_name" type="String" required>
+  Name of the collateral group this pair belongs to
+</ParamField>
+
+<ParamField path="collateral_metadata" type="Object<Metadata>" required>
+  Metadata object for the collateral token
+</ParamField>
+
+<ParamField path="open_interest_cap" type="BigDecimal" required>
+  Maximum total open interest allowed for this pair
+</ParamField>
+
+<ParamField path="allow_extended_hours" type="bool" required>
+  Whether to allow trading during extended hours
+</ParamField>
+
+<ParamField path="max_leverage" type="BigDecimal" required>
+  Maximum allowed leverage for positions
+</ParamField>
+
+<ParamField path="max_overnight_leverage" type="BigDecimal" required>
+  Maximum leverage allowed for overnight positions
+</ParamField>
+
+<ParamField path="min_position_value" type="BigDecimal" required>
+  Minimum position value required
+</ParamField>
+
+<ParamField path="maker_fee_rate" type="BigDecimal" required>
+  Fee rate for maker orders
+</ParamField>
+
+<ParamField path="taker_fee_rate" type="BigDecimal" required>
+  Fee rate for taker orders
+</ParamField>
+
+<ParamField path="vault_fee_rate" type="BigDecimal" required>
+  Fee rate allocated to vault
+</ParamField>
+
+### register_group
+
+Registers a new collateral group with cross-margin settings.
+
+```move
+public entry fun register_group(
+    account: &signer,
+    collateral_metadata: Object<Metadata>,
+    group_name: String,
+    max_leverage: BigDecimal,
+    max_collateral_ratio: BigDecimal
+)
+```
+
+<ParamField path="account" type="&signer" required>
+  Governance account signer
+</ParamField>
+
+<ParamField path="collateral_metadata" type="Object<Metadata>" required>
+  Metadata object for the collateral token
+</ParamField>
+
+<ParamField path="group_name" type="String" required>
+  Unique name for the collateral group
+</ParamField>
+
+<ParamField path="max_leverage" type="BigDecimal" required>
+  Maximum leverage allowed for the group
+</ParamField>
+
+<ParamField path="max_collateral_ratio" type="BigDecimal" required>
+  Maximum collateral usage ratio for the group
+</ParamField>
+
+### update_pair_info_config
+
+Updates basic configuration for an existing pair.
+
+```move
+public entry fun update_pair_info_config(
+    account: &signer,
+    asset_id: u64,
+    collateral_metadata: Object<Metadata>,
+    open_interest_cap: BigDecimal,
+    allow_extended_hours: bool,
+    max_leverage: BigDecimal,
+    max_overnight_leverage: BigDecimal,
+    min_position_value: BigDecimal,
+    maker_fee_rate: BigDecimal,
+    taker_fee_rate: BigDecimal,
+    vault_fee_rate: BigDecimal
+)
+```
+
+### update_funding_fee_config
+
+Updates funding fee parameters for a pair.
+
+```move
+public entry fun update_funding_fee_config(
+    account: &signer,
+    asset_id: u64,
+    collateral_metadata: Object<Metadata>,
+    hill_inflection_point_magnitude: BigDecimal,
+    hill_inflection_point_is_positive: bool,
+    max_funding_fee_rate_per_second: BigDecimal,
+    base_spring_factor: BigDecimal,
+    spring_factor_up_scale: BigDecimal,
+    spring_factor_down_scale: BigDecimal,
+    hill_positive_scale: BigDecimal,
+    hill_negative_scale: BigDecimal
+)
+```
+
+### update_rollover_fee_config
+
+Updates rollover fee parameters for a pair.
+
+```move
+public entry fun update_rollover_fee_config(
+    account: &signer,
+    asset_id: u64,
+    collateral_metadata: Object<Metadata>,
+    max_rollover_fee_rate_per_second: BigDecimal,
+    broker_premium_rate_per_second: BigDecimal,
+    is_negative_rollover_allowed: bool
+)
+```
+
+### update_dynamic_spread_config
+
+Updates dynamic spread parameters for a pair.
+
+```move
+public entry fun update_dynamic_spread_config(
+    account: &signer,
+    asset_id: u64,
+    collateral_metadata: Object<Metadata>,
+    max_spread_ratio: BigDecimal,
+    volume_threshold: BigDecimal,
+    decay_rate: BigDecimal
+)
+```
+
+## Position Configuration
+
+### update_position_config
+
+Updates position module configuration.
+
+```move
+public entry fun update_position_config(
+    account: &signer,
+    max_pnl_ratio: BigDecimal
+)
+```
+
+<ParamField path="account" type="&signer" required>
+  Governance account signer
+</ParamField>
+
+<ParamField path="max_pnl_ratio" type="BigDecimal" required>
+  Maximum profit-to-notional ratio before TP is capped
+</ParamField>
+
+## Vault Configuration
+
+### register_collateral
+
+Registers a new collateral type in the vault system.
+
+```move
+public entry fun register_collateral(
+    account: &signer,
+    metadata: Object<Metadata>,
+    max_supply_update_interval: u64,
+    max_supply_increase_ratio: BigDecimal,
+    max_open_pnl_per_token_delta: BigDecimal,
+    max_pnl_per_token_delta: BigDecimal,
+    max_pnl_per_token_delta_reset_interval: u64
+)
+```
+
+<ParamField path="account" type="&signer" required>
+  Governance account signer
+</ParamField>
+
+<ParamField path="metadata" type="Object<Metadata>" required>
+  Metadata object for the collateral token
+</ParamField>
+
+<ParamField path="max_supply_update_interval" type="u64" required>
+  Minimum time between supply updates (in seconds)
+</ParamField>
+
+<ParamField path="max_supply_increase_ratio" type="BigDecimal" required>
+  Maximum ratio by which supply can increase per update
+</ParamField>
+
+<ParamField path="max_open_pnl_per_token_delta" type="BigDecimal" required>
+  Maximum change in open PnL per token
+</ParamField>
+
+<ParamField path="max_pnl_per_token_delta" type="BigDecimal" required>
+  Maximum change in realized PnL per token
+</ParamField>
+
+<ParamField path="max_pnl_per_token_delta_reset_interval" type="u64" required>
+  Interval for resetting PnL delta counters (in seconds)
+</ParamField>
+
+## Referral Configuration
+
+### update_volume_requirement
+
+Updates the volume requirement for referral eligibility.
+
+```move
+public entry fun update_volume_requirement(
+    account: &signer,
+    volume_requirement: BigDecimal
+)
+```
+
+<ParamField path="account" type="&signer" required>
+  Governance account signer
+</ParamField>
+
+<ParamField path="volume_requirement" type="BigDecimal" required>
+  Minimum trading volume required for referral benefits
+</ParamField>

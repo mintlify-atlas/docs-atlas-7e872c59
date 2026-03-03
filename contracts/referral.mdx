@@ -1,0 +1,201 @@
+---
+title: Referral System
+description: Referral code system for trader rewards and incentives
+---
+
+The referral module implements a comprehensive referral code system that allows traders to generate unique codes and earn rewards by inviting new users to the platform.
+
+## Overview
+
+The referral system uses a base36-encoded 8-character code format (e.g., "A7NUHBI8") generated through double hashing to ensure uniform distribution and collision avoidance. Users must meet a minimum trading volume requirement before they can generate their own referral code.
+
+## Key Features
+
+- **Volume-based Code Generation**: Users must reach a minimum trading volume before generating referral codes
+- **Signature Verification**: EIP-191 and SECP256k1 signature verification for secure code registration
+- **Collision-resistant Hashing**: Double hashing (SHA3-256 and SHA2-256) with linear probing
+- **User Volume Tracking**: Automatic accumulation of trading volume for all users
+
+## Data Structures
+
+### ModuleStore
+
+The main storage structure containing:
+- `volume_requirement`: Minimum volume needed to generate a referral code
+- `user_volumes`: Mapping of user addresses to their total trading volumes
+- `referral_codes`: Mapping of code (u64) to referee addresses
+- `referee_to_code`: Mapping of referee addresses to their codes
+- `referral_map`: Mapping of user addresses to their referrers
+
+## Public Functions
+
+### get_referral_code
+
+Retrieve a user's referral code.
+
+```move
+public fun get_referral_code(referee: address): String
+```
+
+<ParamField path="referee" type="address">
+  The address of the user whose referral code to retrieve
+</ParamField>
+
+**Returns**: The referral code as a base36 string, or empty string if no code exists
+
+### initialize
+
+Initialize the referral module.
+
+```move
+public fun initialize(publisher: &signer): GovCapability
+```
+
+<ParamField path="publisher" type="&signer">
+  The module publisher signer (must be @strat)
+</ParamField>
+
+**Returns**: GovCapability for administrative functions
+
+### update_volume_requirement
+
+Update the minimum volume required to generate a referral code.
+
+```move
+public fun update_volume_requirement(
+    _gov_capability: &GovCapability,
+    volume_requirement: BigDecimal
+)
+```
+
+<ParamField path="_gov_capability" type="&GovCapability">
+  Governance capability for authorization
+</ParamField>
+
+<ParamField path="volume_requirement" type="BigDecimal">
+  The new minimum trading volume requirement
+</ParamField>
+
+## Entry Functions
+
+### generate_referral_code
+
+Generate a unique referral code for the caller.
+
+```move
+public entry fun generate_referral_code(account: &signer)
+```
+
+<ParamField path="account" type="&signer">
+  The user generating their referral code
+</ParamField>
+
+**Requirements**:
+- User must have trading volume >= `volume_requirement`
+
+**Emits**: `GenerateCodeEvent` with user address and generated code
+
+### register_referral_code
+
+Register a referral code using signature verification.
+
+```move
+public entry fun register_referral_code(
+    _account: &signer,
+    public_key: vector<u8>,
+    code: String,
+    signature: vector<u8>
+)
+```
+
+<ParamField path="_account" type="&signer">
+  The user account (address derived from public key)
+</ParamField>
+
+<ParamField path="public_key" type="vector<u8>">
+  The user's SECP256k1 public key
+</ParamField>
+
+<ParamField path="code" type="String">
+  The referral code to register (8-character base36)
+</ParamField>
+
+<ParamField path="signature" type="vector<u8>">
+  EIP-191 signature of the referral code
+</ParamField>
+
+**Requirements**:
+- Signature must be valid EIP-191 format
+- Code must exist in the system
+- Address is derived from public key using Keccak hash
+
+**Emits**: `RegisterReferralCodeEvent` with user address, referee, and code
+
+## Friend Functions
+
+### accumulate_user_volume
+
+Accumulate trading volume for a user (called by order module).
+
+```move
+public(friend) fun accumulate_user_volume(
+    addr: address,
+    volume: BigDecimal
+)
+```
+
+<ParamField path="addr" type="address">
+  The user's address
+</ParamField>
+
+<ParamField path="volume" type="BigDecimal">
+  The trading volume to add
+</ParamField>
+
+## Code Generation Algorithm
+
+The referral code generation uses a sophisticated algorithm:
+
+1. **Hashing**: Compute SHA3-256 and SHA2-256 of the user's address
+2. **Modular Arithmetic**: Apply modulo 2^41 to both hash values
+3. **Probing**: Use linear probing with odd step size to find unused codes
+4. **Encoding**: Convert the final u64 value to base36 (8 characters, A-Z0-9)
+
+This ensures:
+- ~2 trillion possible codes (between 2^41 and 2^42)
+- Uniform distribution across the code space
+- Minimal collision probability
+
+## Events
+
+### GenerateCodeEvent
+
+Emitted when a user generates a referral code.
+
+```move
+struct GenerateCodeEvent has copy, drop {
+    user_addr: address,
+    code: String
+}
+```
+
+### RegisterReferralCodeEvent
+
+Emitted when a user registers with a referral code.
+
+```move
+struct RegisterReferralCodeEvent has copy, drop {
+    user_addr: address,
+    referee: address,
+    code: String
+}
+```
+
+## Security
+
+The module implements multiple security measures:
+
+- **EIP-191 Signature Verification**: Ensures the user owns the address
+- **SECP256k1 Recovery**: Derives address from public key using Keccak256
+- **Code Validation**: Verifies referral codes exist before registration
+- **Governance Controls**: Volume requirements can only be updated by governance

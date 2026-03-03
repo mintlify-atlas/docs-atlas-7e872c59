@@ -1,0 +1,567 @@
+---
+title: "Vault Module"
+description: "Liquidity provider system with deposit/withdraw mechanics and LP token management"
+---
+
+The `vault` module manages the liquidity provider (LP) system, handling deposits, withdrawals, LP token minting/burning, and vault PnL distribution.
+
+## Core Data Structures
+
+### LiquidityBalance
+
+Represents a user's LP balance.
+
+<ResponseField name="collateral_metadata" type="Object<Metadata>">
+  Metadata object for the collateral token
+</ResponseField>
+
+<ResponseField name="amount" type="u64">
+  Amount of LP tokens held
+</ResponseField>
+
+<ResponseField name="average_price" type="BigDecimal">
+  Average LP token price when deposited (for event emission)
+</ResponseField>
+
+### LiquidityInfo
+
+Complete liquidity state for a collateral type.
+
+<ResponseField name="collateral_metadata" type="Object<Metadata>">
+  Metadata object for the collateral token
+</ResponseField>
+
+<ResponseField name="epoch_state" type="EpochState">
+  Current epoch state including average open PnL
+</ResponseField>
+
+<ResponseField name="max_supply_info" type="MaxSupplyInfo">
+  Maximum supply configuration and state
+</ResponseField>
+
+<ResponseField name="max_pnl_per_token_info" type="MaxPnlPerTokenInfo">
+  PnL per token limits and tracking
+</ResponseField>
+
+<ResponseField name="open_pnl" type="SignedBigDecimal">
+  Current open PnL in USD value
+</ResponseField>
+
+<ResponseField name="open_pnl_snapshot" type="BigDecimal">
+  Snapshot of average open PnL
+</ResponseField>
+
+<ResponseField name="pnl_per_token" type="SignedBigDecimal">
+  Current PnL per LP token (represents liquidity buffer if positive)
+</ResponseField>
+
+<ResponseField name="pnl_per_token_snapshot" type="SignedBigDecimal">
+  Snapshot of PnL per token at epoch boundary
+</ResponseField>
+
+<ResponseField name="last_collateral_price" type="BigDecimal">
+  Most recent collateral price
+</ResponseField>
+
+<ResponseField name="reward_per_token" type="BigDecimal">
+  Accumulated rewards per LP token
+</ResponseField>
+
+<ResponseField name="share_price" type="BigDecimal">
+  Current LP token share price
+</ResponseField>
+
+<ResponseField name="supply" type="u128">
+  Total LP token supply
+</ResponseField>
+
+### EpochInfo
+
+Vault epoch configuration and timing.
+
+<ResponseField name="epoch" type="u64">
+  Current epoch number
+</ResponseField>
+
+<ResponseField name="epoch_start_timestamp" type="u64">
+  Timestamp when current epoch started
+</ResponseField>
+
+<ResponseField name="cooldown_start_timestamp" type="u64">
+  Timestamp when withdrawal cooldown period begins
+</ResponseField>
+
+<ResponseField name="epoch_end_timestamp" type="u64">
+  Timestamp when current epoch ends
+</ResponseField>
+
+<ResponseField name="unlock_period" type="u64">
+  Number of epochs before withdrawal unlocks
+</ResponseField>
+
+<ResponseField name="epoch_duration" type="u64">
+  Duration of each epoch in seconds
+</ResponseField>
+
+<ResponseField name="cooldown_start_after" type="u64">
+  Time after epoch start when cooldown begins
+</ResponseField>
+
+<ResponseField name="open_pnl_snapshot_interval" type="u64">
+  Interval for taking open PnL snapshots
+</ResponseField>
+
+### WithdrawRequestResponse
+
+Withdrawal request details.
+
+<ResponseField name="addr" type="address">
+  User address that created the request
+</ResponseField>
+
+<ResponseField name="metadata" type="Object<Metadata>">
+  Collateral token metadata
+</ResponseField>
+
+<ResponseField name="unlock_epoch" type="u64">
+  Epoch when withdrawal becomes available
+</ResponseField>
+
+<ResponseField name="auto_amount" type="u64">
+  Amount that can be auto-withdrawn by anyone
+</ResponseField>
+
+<ResponseField name="manual_amount" type="u64">
+  Amount that can only be withdrawn by owner
+</ResponseField>
+
+### CollateralInfo
+
+Summary information for a collateral type.
+
+<ResponseField name="collateral_metadata" type="Object<Metadata>">
+  Metadata object for the collateral token
+</ResponseField>
+
+<ResponseField name="current_supply" type="u128">
+  Current LP token supply
+</ResponseField>
+
+<ResponseField name="max_supply" type="u128">
+  Maximum allowed LP token supply
+</ResponseField>
+
+<ResponseField name="share_price" type="BigDecimal">
+  Current LP token price
+</ResponseField>
+
+<ResponseField name="epoch_state" type="EpochState">
+  Current epoch state
+</ResponseField>
+
+## View Functions
+
+### get_user_withdraw_requests
+
+Retrieves all withdrawal requests for a specific user.
+
+```move
+#[view]
+public fun get_user_withdraw_requests(
+    user_addr: address,
+    limit: u64,
+    key: Option<vector<u8>>
+): PaginationResponse<vector<u8>, WithdrawRequestResponse>
+```
+
+<ParamField path="user_addr" type="address" required>
+  User address to query
+</ParamField>
+
+<ParamField path="limit" type="u64" required>
+  Maximum number of requests to return
+</ParamField>
+
+<ParamField path="key" type="Option<vector<u8>>">
+  Pagination cursor
+</ParamField>
+
+### get_auto_withdraw_requests
+
+Retrieves all auto-withdrawal requests for the current epoch.
+
+```move
+#[view]
+public fun get_auto_withdraw_requests(
+    limit: u64,
+    key: Option<vector<u8>>
+): PaginationResponse<vector<u8>, WithdrawRequestResponse>
+```
+
+<ParamField path="limit" type="u64" required>
+  Maximum number of requests to return
+</ParamField>
+
+<ParamField path="key" type="Option<vector<u8>>">
+  Pagination cursor
+</ParamField>
+
+### get_liquidity_balance
+
+Retrieves a user's available LP balance (excluding pending withdrawals).
+
+```move
+#[view]
+public fun get_liquidity_balance(
+    user_addr: address,
+    collateral_metadata: Object<Metadata>
+): u64
+```
+
+<ParamField path="user_addr" type="address" required>
+  User address to query
+</ParamField>
+
+<ParamField path="collateral_metadata" type="Object<Metadata>" required>
+  Collateral token metadata
+</ParamField>
+
+### get_max_mint_amount
+
+Retrieves the maximum amount of LP tokens that can be minted.
+
+```move
+#[view]
+public fun get_max_mint_amount(
+    collateral_metadata: Object<Metadata>
+): u128
+```
+
+<ParamField path="collateral_metadata" type="Object<Metadata>" required>
+  Collateral token metadata
+</ParamField>
+
+### get_max_burn_amount
+
+Retrieves the maximum amount of LP tokens that can be burned.
+
+```move
+#[view]
+public fun get_max_burn_amount(
+    collateral_metadata: Object<Metadata>
+): u128
+```
+
+<ParamField path="collateral_metadata" type="Object<Metadata>" required>
+  Collateral token metadata
+</ParamField>
+
+### get_share_price
+
+Retrieves the current LP token share price.
+
+```move
+#[view]
+public fun get_share_price(
+    collateral_metadata: Object<Metadata>
+): BigDecimal
+```
+
+<ParamField path="collateral_metadata" type="Object<Metadata>" required>
+  Collateral token metadata
+</ParamField>
+
+### get_collateral_infos
+
+Retrieves information for all registered collateral types.
+
+```move
+#[view]
+public fun get_collateral_infos(): vector<CollateralInfo>
+```
+
+### get_max_releasable_pnl
+
+Retrieves the maximum PnL that can be released from the vault.
+
+```move
+#[view]
+public fun get_max_releasable_pnl(
+    collateral_metadata: Object<Metadata>
+): u64
+```
+
+<ParamField path="collateral_metadata" type="Object<Metadata>" required>
+  Collateral token metadata
+</ParamField>
+
+## Entry Functions
+
+### deposit
+
+Deposits collateral and mints LP tokens.
+
+```move
+public entry fun deposit(
+    account: &signer,
+    metadata: Object<Metadata>,
+    amount: u64
+)
+```
+
+<ParamField path="account" type="&signer" required>
+  User account making the deposit
+</ParamField>
+
+<ParamField path="metadata" type="Object<Metadata>" required>
+  Collateral token metadata
+</ParamField>
+
+<ParamField path="amount" type="u64" required>
+  Amount of collateral to deposit
+</ParamField>
+
+### request_withdraw
+
+Requests withdrawal of LP tokens.
+
+```move
+public entry fun request_withdraw(
+    account: &signer,
+    metadata: Object<Metadata>,
+    share_amount: u64,
+    is_auto_request: bool
+)
+```
+
+<ParamField path="account" type="&signer" required>
+  User account requesting withdrawal
+</ParamField>
+
+<ParamField path="metadata" type="Object<Metadata>" required>
+  Collateral token metadata
+</ParamField>
+
+<ParamField path="share_amount" type="u64" required>
+  Amount of LP tokens to withdraw
+</ParamField>
+
+<ParamField path="is_auto_request" type="bool" required>
+  Whether this is an auto-withdrawal request (executable by anyone)
+</ParamField>
+
+### cancel_withdraw
+
+Cancels a pending withdrawal request.
+
+```move
+public entry fun cancel_withdraw(
+    account: &signer,
+    metadata: Object<Metadata>,
+    unlock_epoch: u64,
+    share_amount: u64,
+    is_auto_request: bool
+)
+```
+
+<ParamField path="account" type="&signer" required>
+  User account canceling the request
+</ParamField>
+
+<ParamField path="metadata" type="Object<Metadata>" required>
+  Collateral token metadata
+</ParamField>
+
+<ParamField path="unlock_epoch" type="u64" required>
+  Epoch when the withdrawal was set to unlock
+</ParamField>
+
+<ParamField path="share_amount" type="u64" required>
+  Amount of LP tokens to cancel
+</ParamField>
+
+<ParamField path="is_auto_request" type="bool" required>
+  Whether this is an auto-withdrawal request
+</ParamField>
+
+### withdraw
+
+Executes a withdrawal after unlock period.
+
+```move
+public entry fun withdraw(
+    account: &signer,
+    addr: address,
+    metadata: Object<Metadata>,
+    share_amount: u64,
+    is_auto_request: bool
+)
+```
+
+<ParamField path="account" type="&signer" required>
+  Account executing the withdrawal (can be anyone for auto-requests)
+</ParamField>
+
+<ParamField path="addr" type="address" required>
+  Owner of the withdrawal request
+</ParamField>
+
+<ParamField path="metadata" type="Object<Metadata>" required>
+  Collateral token metadata
+</ParamField>
+
+<ParamField path="share_amount" type="u64" required>
+  Amount of LP tokens to withdraw
+</ParamField>
+
+<ParamField path="is_auto_request" type="bool" required>
+  Whether this is an auto-withdrawal request
+</ParamField>
+
+### deposit_liquidity_buffer
+
+Deposits collateral as liquidity buffer (no LP tokens minted).
+
+```move
+public entry fun deposit_liquidity_buffer(
+    account: &signer,
+    metadata: Object<Metadata>,
+    amount: u64
+)
+```
+
+<ParamField path="account" type="&signer" required>
+  Authorized liquidity buffer provider
+</ParamField>
+
+<ParamField path="metadata" type="Object<Metadata>" required>
+  Collateral token metadata
+</ParamField>
+
+<ParamField path="amount" type="u64" required>
+  Amount of collateral to deposit
+</ParamField>
+
+### withdraw_liquidity_buffer
+
+Withdraws previously deposited liquidity buffer.
+
+```move
+public entry fun withdraw_liquidity_buffer(
+    account: &signer,
+    metadata: Object<Metadata>,
+    amount: u64
+)
+```
+
+<ParamField path="account" type="&signer" required>
+  Authorized liquidity buffer provider
+</ParamField>
+
+<ParamField path="metadata" type="Object<Metadata>" required>
+  Collateral token metadata
+</ParamField>
+
+<ParamField path="amount" type="u64" required>
+  Amount of collateral to withdraw
+</ParamField>
+
+### request_snapshot
+
+Manually requests an epoch snapshot update.
+
+```move
+public entry fun request_snapshot(
+    _account: &signer,
+    metadata: Object<Metadata>
+)
+```
+
+<ParamField path="_account" type="&signer" required>
+  Account requesting the snapshot
+</ParamField>
+
+<ParamField path="metadata" type="Object<Metadata>" required>
+  Collateral token metadata
+</ParamField>
+
+### start_new_epoch
+
+Starts a new epoch when the current epoch ends.
+
+```move
+public entry fun start_new_epoch(
+    _account: &signer
+)
+```
+
+<ParamField path="_account" type="&signer" required>
+  Account triggering the new epoch
+</ParamField>
+
+## Public Functions
+
+### get_epoch_info
+
+Retrieves complete epoch configuration and state.
+
+```move
+public fun get_epoch_info(): (
+    u64, // epoch
+    u64, // epoch_start_timestamp
+    u64, // cooldown_start_timestamp
+    u64, // epoch_end_timestamp
+    u64, // unlock_period
+    u64, // epoch_duration
+    u64, // cooldown_start_after
+    u64  // open_pnl_snapshot_interval
+)
+```
+
+### collect_reward
+
+Distributes rewards to LP holders.
+
+```move
+public fun collect_reward(fa: FungibleAsset)
+```
+
+<ParamField path="fa" type="FungibleAsset" required>
+  Fungible asset containing the reward tokens
+</ParamField>
+
+### check_collateral_registered
+
+Verifies that a collateral type is registered.
+
+```move
+public fun check_collateral_registered(
+    metadata: Object<Metadata>
+)
+```
+
+<ParamField path="metadata" type="Object<Metadata>" required>
+  Collateral token metadata to verify
+</ParamField>
+
+### available_collateral
+
+Calculates available collateral for trading.
+
+```move
+public fun available_collateral(
+    collateral_metadata: Object<Metadata>
+): u128
+```
+
+<ParamField path="collateral_metadata" type="Object<Metadata>" required>
+  Collateral token metadata
+</ParamField>
+
+### min_total_supply
+
+Returns the minimum total supply required.
+
+```move
+public fun min_total_supply(): u64
+```

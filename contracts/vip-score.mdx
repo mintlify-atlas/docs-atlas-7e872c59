@@ -1,0 +1,454 @@
+---
+title: VIP Scoring System
+description: VIP tier system for fee discounts based on trading activity and deposits
+---
+
+The VIP score module implements a comprehensive scoring system that rewards users based on their trading volume and vault deposits. Users accumulate points each stage, which determine their VIP tier and associated fee discounts.
+
+## Overview
+
+The VIP scoring system tracks user activity across time-bound stages and calculates scores based on:
+- **Trading Volume**: Raw trading volume with asset-specific and collateral-specific multipliers
+- **Vault Deposits**: LP token deposits with duration-based multipliers
+- **Stage Management**: Automatic stage transitions and score finalization
+
+## Key Concepts
+
+### Stages
+
+Time-bound periods during which scores are accumulated. Each stage:
+- Has a start time, end time, and interval
+- Accumulates separate scores for each user
+- Is finalized when the stage ends
+- Automatically transitions to the next stage
+
+### Score Calculation
+
+Scores are calculated using a complex formula that considers:
+
+```
+score = (trade_volume * trade_asset_multiplier * trade_collateral_multiplier * vault_multiplier) / trade_factor
+
+vault_multiplier = min(max_vault_multiplier, 1 + vault_collateral_multiplier * deposit_amount * duration_multiplier / deposit_factor)
+
+duration_multiplier = min(max_duration_multiplier, 1 + time_weighted_lp_balance / duration_factor)
+```
+
+## Data Structures
+
+### ModuleStore
+
+Main storage for stage and deployer management:
+- `init_stage`: The initial stage number
+- `deployers`: Authorized deployers who can feed events
+- `scores`: Mapping of stage numbers to score data
+
+### StratDataStore
+
+Stores configuration and user data for VIP scoring:
+- `paused`: Whether score updates are paused
+- `decimal_scores`: User decimal scores (to minimize rounding)
+- `lp_prices`: LP token prices for each collateral
+- `vault_data`: Time-weighted vault deposit data
+- `trade_config`: Trading score configuration
+- `vault_configs`: Vault deposit configuration per collateral
+
+### StageInfo
+
+Stage timing information:
+- `stage`: Current stage number
+- `stage_start_time`: Start timestamp of current stage
+- `stage_end_time`: End timestamp of current stage
+- `stage_interval`: Duration of each stage in seconds
+
+## View Functions
+
+### get_scores
+
+Retrieve paginated scores for a specific stage.
+
+```move
+#[view]
+public fun get_scores(
+    stage: u64,
+    limit: u16,
+    start_after: Option<address>
+): GetScoresResponse
+```
+
+<ParamField path="stage" type="u64">
+  The stage number to query
+</ParamField>
+
+<ParamField path="limit" type="u16">
+  Maximum number of results (max: 1000)
+</ParamField>
+
+<ParamField path="start_after" type="Option<address>">
+  Pagination cursor - address to start after
+</ParamField>
+
+**Returns**: `GetScoresResponse` containing stage number and vector of scores
+
+### get_score
+
+Get the score for a specific user in a specific stage.
+
+```move
+#[view]
+public fun get_score(account: address, stage: u64): u64
+```
+
+<ParamField path="account" type="address">
+  The user's address
+</ParamField>
+
+<ParamField path="stage" type="u64">
+  The stage number
+</ParamField>
+
+**Returns**: The user's score for that stage (0 if no score exists)
+
+### get_total_score
+
+Get the total score across all users for a specific stage.
+
+```move
+#[view]
+public fun get_total_score(stage: u64): u64
+```
+
+<ParamField path="stage" type="u64">
+  The stage number
+</ParamField>
+
+**Returns**: The total score for that stage
+
+## Entry Functions
+
+### update_trade_config
+
+Update the trading score configuration.
+
+```move
+public entry fun update_trade_config(
+    publisher: &signer,
+    trade_factor: u64,
+    asset_multiplier_keys: vector<u64>,
+    asset_multiplier_values: vector<BigDecimal>,
+    default_asset_multiplier: BigDecimal,
+    collateral_multiplier_keys: vector<Object<Metadata>>,
+    collateral_multiplier_values: vector<BigDecimal>,
+    default_collateral_multiplier: BigDecimal
+)
+```
+
+<ParamField path="publisher" type="&signer">
+  The module publisher (must be @vip_score)
+</ParamField>
+
+<ParamField path="trade_factor" type="u64">
+  Divisor for score calculation (e.g., 1000 * 1000000 for $1000 USD)
+</ParamField>
+
+<ParamField path="asset_multiplier_keys" type="vector<u64>">
+  Asset IDs for custom multipliers
+</ParamField>
+
+<ParamField path="asset_multiplier_values" type="vector<BigDecimal>">
+  Multiplier values for each asset
+</ParamField>
+
+<ParamField path="default_asset_multiplier" type="BigDecimal">
+  Default multiplier for assets not in the map
+</ParamField>
+
+<ParamField path="collateral_multiplier_keys" type="vector<Object<Metadata>>">
+  Collateral metadata objects for custom multipliers
+</ParamField>
+
+<ParamField path="collateral_multiplier_values" type="vector<BigDecimal>">
+  Multiplier values for each collateral
+</ParamField>
+
+<ParamField path="default_collateral_multiplier" type="BigDecimal">
+  Default multiplier for collaterals not in the map
+</ParamField>
+
+### upsert_vault_config
+
+Update or insert vault configuration for a specific collateral.
+
+```move
+public entry fun upsert_vault_config(
+    publisher: &signer,
+    collateral_metadata: Object<Metadata>,
+    max_vault_multiplier: BigDecimal,
+    collateral_multiplier: BigDecimal,
+    deposit_factor: u64,
+    max_duration_multiplier: BigDecimal,
+    duration_factor: u128
+)
+```
+
+<ParamField path="publisher" type="&signer">
+  The module publisher
+</ParamField>
+
+<ParamField path="collateral_metadata" type="Object<Metadata>">
+  The collateral token metadata
+</ParamField>
+
+<ParamField path="max_vault_multiplier" type="BigDecimal">
+  Maximum vault multiplier cap
+</ParamField>
+
+<ParamField path="collateral_multiplier" type="BigDecimal">
+  Multiplier for this collateral's deposits
+</ParamField>
+
+<ParamField path="deposit_factor" type="u64">
+  Divisor for deposit amount (e.g., 10000 * 1000000)
+</ParamField>
+
+<ParamField path="max_duration_multiplier" type="BigDecimal">
+  Maximum duration multiplier cap
+</ParamField>
+
+<ParamField path="duration_factor" type="u128">
+  Divisor for time-weighted balance (e.g., 60*60*24*100*1000000000 for 100 days)
+</ParamField>
+
+### set_init_stage
+
+Set the initial stage (can only be called once).
+
+```move
+public entry fun set_init_stage(
+    deployer: &signer,
+    stage: u64,
+    stage_start_time: u64,
+    stage_end_time: u64,
+    stage_interval: u64
+)
+```
+
+<ParamField path="deployer" type="&signer">
+  The module publisher
+</ParamField>
+
+<ParamField path="stage" type="u64">
+  Initial stage number (must be > 0)
+</ParamField>
+
+<ParamField path="stage_start_time" type="u64">
+  Timestamp when the stage starts
+</ParamField>
+
+<ParamField path="stage_end_time" type="u64">
+  Timestamp when the stage ends
+</ParamField>
+
+<ParamField path="stage_interval" type="u64">
+  Duration of each stage in seconds
+</ParamField>
+
+### pause / unpause
+
+Pause or unpause score updates.
+
+```move
+public entry fun pause(deployer: &signer)
+public entry fun unpause(deployer: &signer)
+```
+
+<ParamField path="deployer" type="&signer">
+  An authorized deployer
+</ParamField>
+
+### sync_stage_info_script
+
+Permissionless function to sync stage info and finalize past stages.
+
+```move
+public entry fun sync_stage_info_script(_account: &signer)
+```
+
+<ParamField path="_account" type="&signer">
+  Any signer (permissionless)
+</ParamField>
+
+This function automatically:
+- Finalizes all past stages
+- Creates new stage score tables
+- Updates stage timing information
+
+## Public Functions
+
+### feed_vault_event
+
+Called when vault deposits or withdrawals occur.
+
+```move
+public fun feed_vault_event(
+    deployer: &signer,
+    addr: address,
+    collateral_metadata: Object<Metadata>,
+    lp_balance: u64,
+    is_mint: bool
+)
+```
+
+<ParamField path="deployer" type="&signer">
+  An authorized deployer
+</ParamField>
+
+<ParamField path="addr" type="address">
+  The user's address
+</ParamField>
+
+<ParamField path="collateral_metadata" type="Object<Metadata>">
+  The collateral token metadata
+</ParamField>
+
+<ParamField path="lp_balance" type="u64">
+  The user's LP token balance after the event
+</ParamField>
+
+<ParamField path="is_mint" type="bool">
+  True for deposits, false for withdrawals
+</ParamField>
+
+**Note**: Withdrawals reset the time-weighted multiplier to zero
+
+### feed_lp_price_update
+
+Update the LP token price for a collateral.
+
+```move
+public fun feed_lp_price_update(
+    deployer: &signer,
+    collateral_metadata: Object<Metadata>,
+    lp_price: BigDecimal
+)
+```
+
+<ParamField path="deployer" type="&signer">
+  An authorized deployer
+</ParamField>
+
+<ParamField path="collateral_metadata" type="Object<Metadata>">
+  The collateral token metadata
+</ParamField>
+
+<ParamField path="lp_price" type="BigDecimal">
+  The new LP token price
+</ParamField>
+
+### feed_trade_event
+
+Called when a trade is executed.
+
+```move
+public fun feed_trade_event(
+    deployer: &signer,
+    addr: address,
+    asset_id: u64,
+    collateral_metadata: Object<Metadata>,
+    volume: BigDecimal
+)
+```
+
+<ParamField path="deployer" type="&signer">
+  An authorized deployer
+</ParamField>
+
+<ParamField path="addr" type="address">
+  The trader's address
+</ParamField>
+
+<ParamField path="asset_id" type="u64">
+  The asset being traded
+</ParamField>
+
+<ParamField path="collateral_metadata" type="Object<Metadata>">
+  The collateral used for the trade
+</ParamField>
+
+<ParamField path="volume" type="BigDecimal">
+  The trade volume
+</ParamField>
+
+This function:
+1. Syncs stage information
+2. Calculates vault multipliers based on deposit amount and duration
+3. Calculates score using trade volume and multipliers
+4. Updates the user's decimal score and integer score
+
+## Events
+
+### UpdateScoreEvent
+
+Emitted when a user's score is updated.
+
+```move
+struct UpdateScoreEvent has drop, store {
+    account: address,
+    stage: u64,
+    score: u64,
+    total_score: u64
+}
+```
+
+### FinalizedScoreEvent
+
+Emitted when a stage is finalized.
+
+```move
+struct FinalizedScoreEvent has drop, store {
+    stage: u64
+}
+```
+
+### DeployerAddedEvent / DeployerRemovedEvent
+
+Emitted when deployers are added or removed.
+
+```move
+struct DeployerAddedEvent has drop, store {
+    deployer: address
+}
+
+struct DeployerRemovedEvent has drop, store {
+    deployer: address
+}
+```
+
+## Score Multipliers
+
+### Vault Multiplier
+
+Rewards users for depositing collateral in vaults:
+- Increases with deposit amount
+- Increases with deposit duration (time-weighted)
+- Capped at `max_vault_multiplier`
+- Resets to 1.0 on withdrawal
+
+### Duration Multiplier
+
+Rewards long-term deposits:
+- Based on time-weighted LP balance
+- Calculated as: `1 + time_weighted_balance / duration_factor`
+- Capped at `max_duration_multiplier`
+
+### Asset Multiplier
+
+Different assets can have different score weights:
+- Configured per asset ID
+- Default multiplier applies to unlisted assets
+
+### Collateral Multiplier
+
+Different collaterals can have different score weights:
+- Configured per collateral metadata
+- Default multiplier applies to unlisted collaterals

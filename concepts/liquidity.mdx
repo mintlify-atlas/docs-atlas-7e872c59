@@ -1,0 +1,474 @@
+---
+title: "Liquidity"
+description: "How the liquidity provider system works, including vault mechanics, LP tokens, and fee earnings"
+---
+
+## Overview
+
+Strat's liquidity system is a vault-based model where liquidity providers (LPs) deposit collateral to provide trading liquidity. In return, LPs receive share tokens and earn fees from trading activity.
+
+## Vault Architecture
+
+### Vault Structure
+
+Each supported collateral type has its own liquidity pool:
+
+```move
+struct LiquidityInfo {
+    collateral_metadata: Object<Metadata>,  // Collateral token (e.g., USDC)
+    supply: u128,                           // Total LP shares issued
+    share_price: BigDecimal,                // Current price per share
+    reward_per_token: BigDecimal,           // Accumulated rewards
+    pnl_per_token: SignedBigDecimal,       // Unrealized PnL per share
+    open_pnl: SignedBigDecimal,            // Total unrealized PnL
+    
+    // User balances
+    user_balances: Table<address, LiquidityBalance>,
+    
+    // Risk management
+    max_supply_info: MaxSupplyInfo,
+    max_pnl_per_token_info: MaxPnlPerTokenInfo,
+    epoch_state: EpochState
+}
+```
+
+### Collateral Support
+
+Supported collateral tokens:
+- USDC (primary stablecoin)
+- USDT
+- DAI
+- Additional tokens as approved by governance
+
+<Info>
+Each collateral has independent vault parameters, supply caps, and risk limits.
+</Info>
+
+## Depositing Liquidity
+
+### Deposit Process
+
+```move
+deposit(
+    account: &signer,
+    metadata: Object<Metadata>,  // Collateral token
+    amount: u64                  // Amount to deposit
+)
+```
+
+**Calculation:**
+```
+share_amount = amount / share_price
+```
+
+**Effects:**
+1. Collateral transferred from user to vault
+2. LP shares minted to user
+3. Supply increases by `share_amount`
+4. PnL per token adjusted for new supply
+5. VIP score updated (if applicable)
+
+### Share Price
+
+The share price determines how many LP tokens you receive:
+
+```move
+share_price = 1 + reward_per_token - max(0, pnl_per_token_snapshot)
+```
+
+**Components:**
+- Base price: Always starts at 1.0
+- Rewards: Trading fees and protocol revenue increase share price
+- PnL adjustment: Trader profits decrease share price (capped at base)
+
+<Accordion title="Share Price Example">
+**Scenario 1: Profitable Vault**
+```
+reward_per_token = 0.05  (5% accumulated rewards)
+pnl_per_token = -0.02    (traders lost, vault gained)
+share_price = 1 + 0.05 - max(0, -0.02) = 1.05
+```
+
+**Scenario 2: Losing Vault**  
+```
+reward_per_token = 0.05  (5% accumulated rewards)
+pnl_per_token = 0.08     (traders won, vault lost 8%)
+share_price = 1 + 0.05 - max(0, 0.08) = 0.97
+```
+
+Note: Share price can temporarily dip below 1.0 during trader profits, but rewards help restore it over time.
+</Accordion>
+
+### Deposit Limits
+
+Deposits are constrained by maximum supply limits:
+
+```move
+max_mint_amount = max_supply - current_supply
+
+// Max supply formula
+max_supply = (1 + max_supply_increase_ratio) * current_supply
+```
+
+**Supply Cap Mechanics:**
+- Cap increases dynamically based on current supply
+- Updates at configurable intervals (e.g., every 6 hours)
+- Prevents unlimited deposits that could create excessive risk
+
+<Warning>
+If the vault is at maximum capacity, you cannot deposit until the cap increases or other LPs withdraw.
+</Warning>
+
+## Withdrawing Liquidity
+
+### Withdrawal Process
+
+Withdrawals use a two-step epoch-based system:
+
+#### Step 1: Request Withdrawal
+
+```move
+request_withdraw(
+    account: &signer,
+    metadata: Object<Metadata>,
+    share_amount: u64,
+    is_auto_request: bool  // Auto-execute when unlocked
+)
+```
+
+**Request Details:**
+- Locked for `unlock_period` epochs (e.g., 2 epochs)
+- Can be manual or automatic execution
+- Cannot trade or transfer shares during lock
+
+#### Step 2: Execute Withdrawal
+
+```move
+withdraw(
+    account: &signer,
+    addr: address,              // User address
+    metadata: Object<Metadata>,
+    share_amount: u64,
+    is_auto_request: bool
+)
+```
+
+**Withdrawal Calculation:**
+```
+collateral_amount = share_amount * share_price
+vault_pnl = (share_price - average_price) * share_amount
+```
+
+**Effects:**
+1. LP shares burned
+2. Collateral transferred to user  
+3. Supply decreases
+4. PnL per token adjusted
+5. VIP score updated
+
+### Epoch System
+
+```move
+struct EpochInfo {
+    epoch: u64,                       // Current epoch number
+    epoch_start_timestamp: u64,       // When epoch started
+    cooldown_start_timestamp: u64,    // When withdrawals lock
+    epoch_end_timestamp: u64,         // When epoch ends
+    epoch_duration: u64,              // Length of epoch (seconds)
+    unlock_period: u64,               // Epochs until unlock
+    cooldown_start_after: u64,        // Time until cooldown
+    open_pnl_snapshot_interval: u64   // PnL snapshot frequency
+}
+```
+
+**Epoch Timeline:**
+```
+Epoch Start
+    ↓
+    ├─── Deposit & Request Period ───┤
+    ↓                                  ↓
+Cooldown Start                   Epoch End
+    ↓                                  ↓
+    └─── Cooldown Period ───────────┘
+         (No new requests)
+```
+
+<Accordion title="Epoch Mechanics">
+**Purpose:**
+Epochs prevent liquidity attacks and ensure fair PnL distribution:
+
+1. **Request Lockup:** Prevents instant withdrawal during volatile periods
+2. **PnL Snapshots:** Averaged during cooldown to prevent manipulation  
+3. **Fair Pricing:** Ensures all withdrawals in an epoch get similar pricing
+
+**Timeline Example (7-day epochs):**
+- Day 0-6: Normal deposits and withdrawal requests
+- Day 6-7: Cooldown (no new requests, PnL snapshots taken)
+- Day 7: Epoch ends, next epoch begins
+- Day 14: Withdrawal requests from Day 0-6 can execute
+
+**Auto vs Manual:**
+- Auto requests: Anyone can execute (helpful during high gas)
+- Manual requests: Only owner can execute (more control)
+</Accordion>
+
+### Withdrawal Limits
+
+Withdrawals are capped to protect vault stability:
+
+```move
+max_burn_amount = current_supply - MIN_TOTAL_SUPPLY  // MIN = 1000
+
+// Additional constraints
+if (epoch_state.request_count != 0 || supply == 0) {
+    max_burn_amount = 0  // No withdrawals during PnL settlement
+}
+```
+
+<Warning>
+Cannot withdraw during the PnL snapshot period. Wait until the next epoch begins.
+</Warning>
+
+## Fee Distribution
+
+### Fee Types
+
+LPs earn from multiple fee sources:
+
+1. **Opening Fees:** Vault portion of position opening fees
+2. **Rollover Fees:** Time-based borrowing fees from traders
+3. **Funding Fees:** Fees from imbalanced positions
+4. **Liquidation Fees:** Collateral from liquidated positions
+
+### Collection Mechanism
+
+```move
+collect_pnl(fa: FungibleAsset)  // Called when vault earns fees
+```
+
+**Distribution:**
+```
+pnl_per_token_delta = fee_amount / total_supply
+pnl_per_token = pnl_per_token - pnl_per_token_delta  
+// Negative pnl_per_token = vault profit ("liquidity buffer")
+```
+
+### Reward Collection
+
+Additional rewards (protocol revenue sharing, incentives):
+
+```move
+collect_reward(fa: FungibleAsset)
+```
+
+**Distribution:**
+```
+reward_per_token_delta = reward_amount / total_supply  
+reward_per_token = reward_per_token + reward_per_token_delta
+share_price = share_price + reward_per_token_delta
+```
+
+<Info>
+Rewards permanently increase share price, while trading PnL creates temporary fluctuations that can be positive or negative.
+</Info>
+
+## PnL Management
+
+### Open PnL Tracking
+
+The vault tracks unrealized PnL from all open positions:
+
+```move
+open_pnl = Σ(price - open_price) * net_open_interest_per_pair
+```
+
+**Net Open Interest:**
+```
+net_oi = long_open_interest - short_open_interest
+
+If net_oi > 0: Vault is short (profits when price falls)
+If net_oi < 0: Vault is long (profits when price rises)
+```
+
+### PnL Per Token
+
+Distributes realized and unrealized PnL across all LP shares:
+
+```move
+pnl_per_token = Σ(realized_pnl + unrealized_pnl) / total_supply
+```
+
+**Snapshot System:**
+- PnL snapshots taken during epoch cooldown
+- Averaged across multiple intervals  
+- Used to calculate fair withdrawal prices
+- Protects against price manipulation
+
+### Maximum PnL Protection
+
+The vault has caps to prevent catastrophic losses:
+
+```move
+struct MaxPnlPerTokenInfo {
+    max_pnl_per_token_delta: BigDecimal,      // Max total PnL change
+    max_open_pnl_per_token_delta: BigDecimal, // Max unrealized PnL
+    reset_interval: u64,                       // Time until reset
+    accumulated_pnl_per_token: SignedBigDecimal
+}
+```
+
+**Protection Mechanism:**
+```
+if (accumulated_pnl_per_token > max_pnl_per_token_delta) {
+    // Prevent position close that would exceed limit
+    // Position remains open until next interval
+}
+```
+
+<Accordion title="Why Cap PnL?">
+PnL caps protect the vault from:
+
+1. **Flash Crashes:** Extreme price moves causing massive losses
+2. **Oracle Manipulation:** Attackers gaming price feeds  
+3. **Liquidity Crises:** Preventing bank-run scenarios
+
+The cap accumulates over time:
+- Resets every `reset_interval` (e.g., 24 hours)
+- Allows normal trading within limits  
+- Prevents catastrophic single-trade losses
+
+Example:
+- Max PnL: 10% per 24 hours
+- If traders extract 10% in 2 hours, no more closes allowed
+- After 24 hours, counter resets to 0%
+</Accordion>
+
+## Liquidity Buffer
+
+The liquidity buffer represents vault profits held as safety margin:
+
+```move
+liquidity_buffer = -pnl_per_token (when negative)
+
+// Example:
+pnl_per_token = -0.03  → 3% liquidity buffer
+pnl_per_token = 0.02   → 0% buffer (vault owes traders)
+```
+
+**Buffer Sources:**
+- Trading fees collected from traders
+- Liquidation fees  
+- Trader losses (closed positions)
+
+**Buffer Uses:**
+- Absorbs trader profits when positions close
+- Protects LP share price during drawdowns
+- Can be withdrawn by authorized liquidity buffer providers
+
+<Note>
+A healthy vault maintains a positive liquidity buffer (negative pnl_per_token). This buffer smooths out LP returns during volatile trading periods.
+</Note>
+
+## LP Token Management
+
+### Share Tokens
+
+Each LP receives shares proportional to their deposit:
+
+```move
+struct LiquidityBalance {
+    collateral_metadata: Object<Metadata>,
+    amount: u64,              // Number of LP shares
+    average_price: BigDecimal // Average price when deposited
+}
+```
+
+**Average Price Tracking:**
+- Records share price at deposit  
+- Used to calculate personal PnL on withdrawal
+- Weighted average if multiple deposits
+
+### Position Calculation
+
+**Current Value:**
+```
+value = share_amount * current_share_price
+```
+
+**Personal PnL:**  
+```
+pnl = (current_share_price - average_price) * share_amount
+```
+
+**Available Balance:**
+```
+available = total_shares - pending_withdrawals
+```
+
+<Info>
+Your LP tokens represent a claim on a share of the vault's total collateral, including all accumulated fees and PnL.
+</Info>
+
+## Risk Management
+
+### Vault Risks
+
+1. **Trader Profits:** When traders win, vault loses
+2. **Leverage Risk:** High leverage can cause large PnL swings  
+3. **Oracle Risk:** Price feed manipulation or errors
+4. **Liquidity Risk:** Unable to withdraw during high utilization
+
+### Protection Mechanisms
+
+1. **PnL Caps:** Limit maximum trader profits per period
+2. **Liquidation System:** Close undercollateralized positions quickly
+3. **Dynamic Spreads:** Increase costs during imbalanced markets  
+4. **Epoch Withdrawals:** Prevent bank runs and flash attacks
+5. **Supply Caps:** Limit total vault exposure
+6. **Group Limits:** Cap exposure per asset category
+
+### Monitoring Health
+
+**Key Metrics:**
+```
+Utilization = total_positions_value / available_collateral
+Open PnL = sum(unrealized_trader_pnl)
+Liquidity Buffer = -pnl_per_token (if negative)
+Share Price = 1 + rewards - max(0, pnl_snapshot)
+```
+
+**Healthy Vault:**
+- Share price > 1.0
+- Positive liquidity buffer  
+- Utilization < 80%
+- Open PnL well within caps
+
+<Warning>
+Vault health can change rapidly during volatile markets. Monitor your position regularly and be prepared for temporary share price dips.
+</Warning>
+
+## Best Practices
+
+<Tip>
+**Depositing:**
+- Deposit during periods of negative open PnL for better pricing
+- Consider multiple deposits to average your entry price
+- Check supply caps before large deposits
+- Understand epoch timing for withdrawal flexibility
+</Tip>
+
+<Tip>
+**Managing Position:**
+- Monitor share price and vault metrics regularly
+- Keep enough liquidity for redemption fees if needed  
+- Plan withdrawals around epoch boundaries
+- Use auto-withdraw for gas efficiency
+</Tip>
+
+<Tip>
+**Risk Management:**
+- Don't deposit more than you can afford to lock for `unlock_period`
+- Diversify across multiple collateral types if available
+- Understand that share price can temporarily fall below 1.0
+- Check vault utilization before depositing large amounts
+</Tip>

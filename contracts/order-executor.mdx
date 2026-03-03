@@ -1,0 +1,273 @@
+---
+title: "Order Executor Module"
+description: "Keeper interface for executing pending orders and automation"
+---
+
+The `order_executor` module provides the interface for keepers and automated systems to execute pending orders. It validates oracle prices and ensures orders are executed with fresh, accurate data.
+
+## Module Structure
+
+```move
+struct ModuleStore has key {
+    oracle_ttl: u64
+}
+```
+
+<ResponseField name="oracle_ttl" type="u64">
+  Maximum age (in seconds) of oracle prices before they're considered stale (default: 10 seconds)
+</ResponseField>
+
+## Configuration
+
+### get_oracle_ttl
+
+Returns the current oracle time-to-live setting.
+
+```move
+#[view]
+public fun get_oracle_ttl(): u64
+```
+
+<ResponseField name="ttl" type="u64">
+  Oracle TTL in seconds
+</ResponseField>
+
+## Order Execution Functions
+
+### execute_open_order
+
+Executes a pending open order (market, limit, or stop).
+
+```move
+public entry fun execute_open_order(order_id: u64)
+```
+
+<ParamField path="order_id" type="u64" required>
+  ID of the open order to execute
+</ParamField>
+
+Execution flow:
+1. Retrieves asset and collateral for the order
+2. Fetches current oracle prices for asset and collateral
+3. Validates oracle freshness (must be within TTL)
+4. Validates oracle timestamp is after order creation
+5. Calls `order::execute_open_order` with validated prices
+
+Order outcomes:
+- **Market orders**: Execute if slippage is acceptable, otherwise cancelled
+- **Limit orders**: Execute if price target is hit, otherwise remain pending
+- **Stop orders**: Execute if stop price is crossed, otherwise remain pending
+
+Possible cancellation reasons:
+- `NotHit` - Price target not reached (limit/stop orders remain pending)
+- `Slippage` - Market order slippage exceeds maximum
+- `MarketClosed` - Market is currently closed
+- `ExposureLimits` - Would exceed open interest cap
+- `MaxLeverage` - Exceeds maximum allowed leverage
+- `MinLeverage` - Below minimum required leverage
+
+### execute_market_close_order
+
+Executes a pending market close order.
+
+```move
+public entry fun execute_market_close_order(order_id: u64)
+```
+
+<ParamField path="order_id" type="u64" required>
+  ID of the close order to execute
+</ParamField>
+
+Execution flow:
+1. Retrieves asset and collateral for the order
+2. Fetches current oracle prices
+3. Validates oracle freshness and timestamp
+4. Calls `order::execute_market_close_order` with validated prices
+
+The order will be cancelled if:
+- Slippage exceeds maximum
+- Position no longer exists
+- Market is closed (for non-wind-down situations)
+- Max PnL per token limit would be exceeded
+
+### execute_automation_close_order
+
+Executes automated position closures (TP, SL, liquidation, or day trade close).
+
+```move
+public entry fun execute_automation_close_order(
+    position_id: u64,
+    close_type_index: u8
+)
+```
+
+<ParamField path="position_id" type="u64" required>
+  ID of the position to close
+</ParamField>
+
+<ParamField path="close_type_index" type="u8" required>
+  Type of automation close: 0 = Take Profit, 1 = Stop Loss, 2 = Liquidate, 3 = Close Day Trade
+</ParamField>
+
+Automation types:
+
+**Take Profit (0)**
+- Triggers when price reaches or exceeds TP price
+- For long: current_price ≥ tp_price
+- For short: current_price ≤ tp_price
+
+**Stop Loss (1)**
+- Triggers when price reaches or falls below SL price
+- For long: current_price ≤ sl_price
+- For short: current_price ≥ sl_price
+
+**Liquidation (2)**
+- Triggers when position value falls below liquidation threshold
+- Keeper receives liquidation fee
+- Entire position is closed
+
+**Close Day Trade (3)**
+- Closes positions exceeding overnight leverage outside allowed hours
+- Only valid during wind-down window before market close
+
+Note: If position doesn't exist, the function returns silently without error.
+
+### execute_remove_collateral
+
+Executes a pending remove collateral order.
+
+```move
+public entry fun execute_remove_collateral(order_id: u64)
+```
+
+<ParamField path="order_id" type="u64" required>
+  ID of the remove collateral order to execute
+</ParamField>
+
+Execution flow:
+1. Retrieves asset and collateral for the order
+2. Fetches current oracle prices
+3. Validates oracle freshness and timestamp
+4. Validates new leverage is within limits
+5. Removes collateral and updates position
+
+The order will be cancelled if:
+- Resulting leverage would exceed maximum
+- Market is closed and leverage exceeds overnight maximum
+- Position no longer exists
+
+## Oracle Validation
+
+All execution functions validate oracle data to ensure accuracy:
+
+### Oracle TTL Check
+
+```move
+assert!(
+    oracle_timestamp + oracle_ttl > current_timestamp,
+    EORACLE_TTL
+)
+```
+
+Oracle prices must be fresher than the TTL setting (default 10 seconds).
+
+### Order Timestamp Check
+
+```move
+assert!(
+    oracle_timestamp >= order_timestamp,
+    EORDER_TIMESTAMP
+)
+```
+
+Oracle prices must be from after the order was created, preventing execution with stale prices.
+
+## Keeper Integration
+
+Keepers should monitor for executable orders:
+
+### Market Open Orders
+1. Query `order::get_market_open_orders()` for pending orders
+2. For each order, call `execute_open_order(order_id)`
+3. Orders execute immediately or are cancelled
+
+### Limit/Stop Orders
+1. Query `order::check_limit_open_orders_exists()` and `order::check_stop_open_orders_exists()`
+2. Monitor asset prices via oracle
+3. When price target is hit, call `execute_open_order(order_id)`
+4. Order executes if conditions are met
+
+### Close Orders
+1. Query `order::get_market_close_orders()` for pending close orders
+2. Call `execute_market_close_order(order_id)` for each
+3. Monitor for slippage and execution
+
+### Automation Orders
+1. Query user positions via `position::get_user_positions()`
+2. Check current prices against TP/SL values
+3. Calculate position health for liquidations
+4. Call `execute_automation_close_order(position_id, type)` when conditions met
+
+### Remove Collateral Orders
+1. Query `order::get_remove_collateral_orders()`
+2. Call `execute_remove_collateral(order_id)` for each
+3. Validate leverage constraints are satisfied
+
+## Error Codes
+
+```move
+const EORACLE_TTL: u64 = 2;        // Oracle price is too old
+const EORDER_TIMESTAMP: u64 = 3;   // Oracle price predates order
+```
+
+## Best Practices for Keepers
+
+1. **Monitor Oracle TTL**: Ensure your system can fetch and submit prices within the TTL window
+
+2. **Batch Processing**: Execute multiple orders in parallel when possible
+
+3. **Gas Optimization**: Prioritize high-value orders and liquidations
+
+4. **Error Handling**: Handle `EORACLE_TTL` errors by retrying with fresh oracle data
+
+5. **Automation Priority**:
+   - Liquidations (highest priority - time sensitive)
+   - Take Profit/Stop Loss orders
+   - Day trade closes during wind-down window
+   - Regular market orders
+   - Remove collateral orders
+
+6. **Price Impact**: Consider dynamic spreads when executing large orders
+
+## Example: Keeper Workflow
+
+```move
+// 1. Monitor for market open orders
+let (orders, next) = order::get_market_open_orders(100, none());
+
+// 2. Execute each order
+for order_id in orders {
+    order_executor::execute_open_order(order_id);
+}
+
+// 3. Check for automation triggers
+let positions = position::get_user_positions(user, 100, none());
+for pos in positions {
+    let current_price = get_current_price(pos.asset_id);
+    
+    // Check TP
+    if should_take_profit(pos, current_price) {
+        order_executor::execute_automation_close_order(pos.id, 0);
+    }
+    
+    // Check SL
+    if should_stop_loss(pos, current_price) {
+        order_executor::execute_automation_close_order(pos.id, 1);
+    }
+    
+    // Check liquidation
+    if should_liquidate(pos, current_price) {
+        order_executor::execute_automation_close_order(pos.id, 2);
+    }
+}
+```

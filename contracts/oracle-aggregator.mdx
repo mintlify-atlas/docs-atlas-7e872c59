@@ -1,0 +1,304 @@
+---
+title: "Oracle Aggregator Module"
+description: "Price feed aggregation from Stork oracle with market status tracking"
+---
+
+The `oracle_aggregator` module aggregates price feeds from the Stork oracle and manages market status for trading pairs, including market hours and status transitions.
+
+## Core Data Structures
+
+### OracleType
+
+Enum representing supported oracle types.
+
+```move
+enum OracleType has copy, drop, store {
+    Stable,
+    Stork
+}
+```
+
+<ResponseField name="Stable" type="variant">
+  Stable price oracle (always returns 1.0)
+</ResponseField>
+
+<ResponseField name="Stork" type="variant">
+  Stork oracle integration for real-time price feeds
+</ResponseField>
+
+### OracleKey
+
+Identifies an oracle feed.
+
+<ResponseField name="type" type="OracleType">
+  Type of oracle (Stable or Stork)
+</ResponseField>
+
+<ResponseField name="id" type="vector<u8>">
+  Oracle-specific identifier
+</ResponseField>
+
+### MarketStatus
+
+Represents the current and upcoming market status.
+
+<ResponseField name="next_change_time" type="u64">
+  Timestamp when market status will change
+</ResponseField>
+
+<ResponseField name="current_status" type="u8">
+  Current market status code
+</ResponseField>
+
+<ResponseField name="next_status" type="u8">
+  Upcoming market status code after next_change_time
+</ResponseField>
+
+### MarketStatusKeys
+
+Oracle feed identifiers for market status data.
+
+<ResponseField name="type" type="OracleType">
+  Oracle type providing market status
+</ResponseField>
+
+<ResponseField name="next_change_time" type="vector<u8>">
+  Oracle ID for next change time feed
+</ResponseField>
+
+<ResponseField name="current_status" type="vector<u8>">
+  Oracle ID for current status feed
+</ResponseField>
+
+<ResponseField name="next_status" type="vector<u8>">
+  Oracle ID for next status feed
+</ResponseField>
+
+## View Functions
+
+### get_current_asset_index
+
+Retrieves the current asset index counter.
+
+```move
+#[view]
+public fun get_current_asset_index(): u64
+```
+
+### get_market_status
+
+Retrieves market status for a specific asset.
+
+```move
+#[view]
+public fun get_market_status(
+    asset_id: u64
+): (u64, u8, u8)
+```
+
+<ParamField path="asset_id" type="u64" required>
+  Asset identifier
+</ParamField>
+
+Returns a tuple: `(next_change_time, current_status, next_status)`
+
+## Entry Functions
+
+### update_market_status_stork
+
+Updates market status from Stork oracle feeds.
+
+```move
+public entry fun update_market_status_stork(
+    account: &signer,
+    asset_id: u64,
+    temporal_numeric_value_timestamp_ns: vector<u64>,
+    temporal_numeric_value_magnitude: vector<u128>,
+    temporal_numeric_value_negative: vector<bool>,
+    publisher_merkle_roots: vector<vector<u8>>,
+    value_compute_alg_hashes: vector<vector<u8>>,
+    rs: vector<vector<u8>>,
+    ss: vector<vector<u8>>,
+    vs: vector<u8>
+)
+```
+
+<ParamField path="account" type="&signer" required>
+  Account submitting the oracle update
+</ParamField>
+
+<ParamField path="asset_id" type="u64" required>
+  Strat asset ID (not Stork asset ID)
+</ParamField>
+
+<ParamField path="temporal_numeric_value_timestamp_ns" type="vector<u64>" required>
+  Timestamps in nanoseconds for the three oracle values
+</ParamField>
+
+<ParamField path="temporal_numeric_value_magnitude" type="vector<u128>" required>
+  Magnitudes for next_change_time, current_status, and next_status
+</ParamField>
+
+<ParamField path="temporal_numeric_value_negative" type="vector<bool>" required>
+  Sign indicators for the oracle values
+</ParamField>
+
+<ParamField path="publisher_merkle_roots" type="vector<vector<u8>>" required>
+  Merkle roots from Stork publishers
+</ParamField>
+
+<ParamField path="value_compute_alg_hashes" type="vector<vector<u8>>" required>
+  Algorithm hashes for value computation
+</ParamField>
+
+<ParamField path="rs" type="vector<vector<u8>>" required>
+  ECDSA signature r components
+</ParamField>
+
+<ParamField path="ss" type="vector<vector<u8>>" required>
+  ECDSA signature s components
+</ParamField>
+
+<ParamField path="vs" type="vector<u8>" required>
+  ECDSA signature v components
+</ParamField>
+
+<Note>
+This function includes validation:
+- Timestamps must match across all three values
+- Oracle data must be recent (within 10 seconds)
+- Cannot update during market status transition buffer period
+</Note>
+
+## Public Functions
+
+### get_asset_price
+
+Retrieves the price for a trading asset.
+
+```move
+public fun get_asset_price(
+    key: u64
+): (BigDecimal, u64)
+```
+
+<ParamField path="key" type="u64" required>
+  Asset identifier
+</ParamField>
+
+Returns a tuple: `(price, timestamp)`
+
+### get_collateral_price
+
+Retrieves the price for a collateral token.
+
+```move
+public fun get_collateral_price(
+    metadata: Object<Metadata>
+): (BigDecimal, u64)
+```
+
+<ParamField path="metadata" type="Object<Metadata>" required>
+  Collateral token metadata
+</ParamField>
+
+Returns a tuple: `(price, timestamp)`
+
+### check_asset_registered
+
+Verifies that an asset oracle is registered.
+
+```move
+public fun check_asset_registered(
+    asset_id: u64
+)
+```
+
+<ParamField path="asset_id" type="u64" required>
+  Asset identifier to verify
+</ParamField>
+
+### check_collateral_registered
+
+Verifies that a collateral oracle is registered.
+
+```move
+public fun check_collateral_registered(
+    collateral: Object<Metadata>
+)
+```
+
+<ParamField path="collateral" type="Object<Metadata>" required>
+  Collateral metadata to verify
+</ParamField>
+
+### convert_oracle_type_to_string
+
+Converts OracleType to string representation.
+
+```move
+public fun convert_oracle_type_to_string(
+    self: &OracleType
+): String
+```
+
+<ParamField path="self" type="&OracleType" required>
+  Oracle type to convert
+</ParamField>
+
+### convert_oracle_type_index_to_oracle_type
+
+Converts numeric index to OracleType.
+
+```move
+public fun convert_oracle_type_index_to_oracle_type(
+    index: u8
+): OracleType
+```
+
+<ParamField path="index" type="u8" required>
+  Index value (1 = Stable, 2 = Stork)
+</ParamField>
+
+### get_market_status_transition_buffers
+
+Retrieves the configured market status transition buffers.
+
+```move
+public fun get_market_status_transition_buffers(): (u64, u64)
+```
+
+Returns a tuple: `(pre_market_status_transition_buffer, post_market_status_transition_buffer)`
+
+## Oracle Integration
+
+### Stork Oracle
+
+The module integrates with the Stork oracle for real-time price feeds. Stork prices are:
+
+- Provided with nanosecond timestamps
+- Scaled by 10^18 (converted to BigDecimal)
+- Verified using ECDSA signatures from multiple publishers
+- Subject to recency checks
+
+### Stable Oracle
+
+The stable oracle always returns:
+- Price: `1.0`
+- Timestamp: Current block timestamp
+
+Useful for stablecoin collateral or testing.
+
+## Market Status Transition Buffers
+
+To prevent trading during volatile periods around market status changes, the system enforces transition buffers:
+
+- **Pre-transition buffer**: Period before market status change when oracle updates are blocked
+- **Post-transition buffer**: Period after market status change when oracle updates are blocked
+
+Default: 60 seconds for both buffers
+
+<Warning>
+Operations requiring price feeds are not allowed when:
+`market_change_timestamp - pre_buffer ≤ oracle_timestamp ≤ market_change_timestamp + post_buffer`
+</Warning>

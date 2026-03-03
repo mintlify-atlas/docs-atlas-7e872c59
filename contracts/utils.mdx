@@ -1,0 +1,309 @@
+---
+title: Utility Functions
+description: Shared utility functions for pagination, options, and VIP score deployment
+---
+
+The utils module provides a collection of utility functions used across the Strat protocol, including pagination helpers, option utilities, and VIP score deployer management.
+
+## Overview
+
+This module contains helper functions that are shared across multiple modules in the protocol. It includes:
+- Table iteration with pagination
+- Option handling utilities
+- Address constants
+- VIP score deployer signer generation
+
+## Data Structures
+
+### PaginationResponse
+
+A generic response structure for paginated queries.
+
+```move
+struct PaginationResponse<K: copy + drop, V: copy + drop> has copy, drop {
+    data: vector<V>,
+    next_key: Option<K>
+}
+```
+
+- `data`: Vector of results for the current page
+- `next_key`: Cursor for the next page (None if last page)
+
+### VipScoreDeployerRef
+
+Internal storage for VIP score deployer signer.
+
+```move
+struct VipScoreDeployerRef has key {
+    extend_ref: ExtendRef
+}
+```
+
+## Pagination Functions
+
+### create_table_iter_pagination_response
+
+Create a paginated response from a table iterator.
+
+```move
+public inline fun create_table_iter_pagination_response<
+    RawKey: copy + drop,
+    EncodedKey: copy + drop,
+    RawVal,
+    ResVal: copy + drop
+>(
+    table: &Table<RawKey, RawVal>,
+    key_encoder: |RawKey| EncodedKey,
+    key_decoder: |EncodedKey| RawKey,
+    val_converter: |RawKey, &RawVal| ResVal,
+    default_start: Option<RawKey>,
+    default_end: Option<RawKey>,
+    limit: u64,
+    key: Option<EncodedKey>,
+    order: u8
+): PaginationResponse<EncodedKey, ResVal>
+```
+
+<ParamField path="table" type="&Table<RawKey, RawVal>">
+  The table to iterate over
+</ParamField>
+
+<ParamField path="key_encoder" type="|RawKey| EncodedKey">
+  Function to encode raw keys for API response
+</ParamField>
+
+<ParamField path="key_decoder" type="|EncodedKey| RawKey">
+  Function to decode API keys to raw keys
+</ParamField>
+
+<ParamField path="val_converter" type="|RawKey, &RawVal| ResVal">
+  Function to convert raw values to response values
+</ParamField>
+
+<ParamField path="default_start" type="Option<RawKey>">
+  Default start key if none provided
+</ParamField>
+
+<ParamField path="default_end" type="Option<RawKey>">
+  Default end key if none provided
+</ParamField>
+
+<ParamField path="limit" type="u64">
+  Maximum number of results (must be > 0)
+</ParamField>
+
+<ParamField path="key" type="Option<EncodedKey>">
+  Pagination cursor key
+</ParamField>
+
+<ParamField path="order" type="u8">
+  Iteration order (1 = ascending, 2 = descending)
+</ParamField>
+
+**Returns**: `PaginationResponse` with data and next_key
+
+**Order Behavior**:
+- Order 1 (ascending): If key provided, starts after that key
+- Order 2 (descending): If key provided, ends before that key
+
+**Next Key Behavior**:
+- If more results exist after the limit, `next_key` contains the last returned key
+- If this is the last page, `next_key` is None
+
+### pack_pagination_response
+
+Create a pagination response from data and next key.
+
+```move
+public fun pack_pagination_response<K: copy + drop, V: copy + drop>(
+    data: vector<V>,
+    next_key: Option<K>
+): PaginationResponse<K, V>
+```
+
+<ParamField path="data" type="vector<V>">
+  The result data
+</ParamField>
+
+<ParamField path="next_key" type="Option<K>">
+  The pagination cursor for the next page
+</ParamField>
+
+### unpack_pagination_response
+
+Extract data and next key from a pagination response.
+
+```move
+public fun unpack_pagination_response<K: copy + drop, V: copy + drop>(
+    res: PaginationResponse<K, V>
+): (vector<V>, Option<K>)
+```
+
+<ParamField path="res" type="PaginationResponse<K, V>">
+  The pagination response to unpack
+</ParamField>
+
+**Returns**: Tuple of (data, next_key)
+
+## Option Utilities
+
+### borrow_option_with_default
+
+Borrow an option's value or return a default.
+
+```move
+public fun borrow_option_with_default<T: copy + drop>(
+    opt: &Option<T>,
+    default: T
+): T
+```
+
+<ParamField path="opt" type="&Option<T>">
+  The option to borrow from
+</ParamField>
+
+<ParamField path="default" type="T">
+  Value to return if option is None
+</ParamField>
+
+**Returns**: The option's value if Some, otherwise the default
+
+### extract_and_destroy
+
+Extract value from Some option and destroy the empty option.
+
+```move
+public fun extract_and_destroy<T>(opt: Option<T>): T
+```
+
+<ParamField path="opt" type="Option<T>">
+  The option to extract from (must be Some)
+</ParamField>
+
+**Returns**: The extracted value
+
+**Note**: This consumes the option and destroys it. Option must contain a value.
+
+## Address Utilities
+
+### max_address
+
+Get the maximum possible address value.
+
+```move
+public fun max_address(): address
+```
+
+**Returns**: `0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff`
+
+**Use cases**:
+- End boundary for table iteration
+- Sentinel values
+
+### deployer_address
+
+Get the VIP score deployer address.
+
+```move
+public fun deployer_address(): address
+```
+
+**Returns**: The address of the VIP score deployer object
+
+## VIP Score Deployer Functions
+
+### generate_vip_score_deployer
+
+Generate a signer for VIP score operations (friend function).
+
+```move
+public(friend) fun generate_vip_score_deployer(): signer
+```
+
+**Returns**: Signer for the VIP score deployer
+
+**Access**: Only accessible to friend modules (vault, order)
+
+**Use case**: Used to call VIP score event feed functions from vault and order modules
+
+## Usage Examples
+
+### Pagination Example
+
+```move
+let response = create_table_iter_pagination_response(
+    &my_table,
+    |key| key,                    // identity encoder
+    |encoded| encoded,            // identity decoder
+    |key, val| (*val),           // copy value
+    option::none(),              // no default start
+    option::none(),              // no default end
+    100,                         // limit
+    start_after_key,             // pagination cursor
+    1                            // ascending order
+);
+
+let (data, next_key) = unpack_pagination_response(response);
+
+// Process data...
+
+if (option::is_some(&next_key)) {
+    // More pages available
+};
+```
+
+### Option with Default
+
+```move
+let maybe_value: Option<u64> = get_optional_value();
+let value = borrow_option_with_default(&maybe_value, 100);
+// value is either the option's value or 100
+```
+
+### Max Address for Iteration
+
+```move
+let iter = table.iter(
+    option::none(),              // start from beginning
+    option::some(max_address()), // end at maximum
+    1                            // ascending
+);
+```
+
+## Error Codes
+
+- `EINVALID_LIMIT (1)`: Pagination limit must be greater than 0
+
+## Friend Modules
+
+The following modules have friend access:
+- `strat::vault`: For VIP score deployer access
+- `strat::order`: For VIP score deployer access
+
+## Implementation Notes
+
+### Pagination Iterator
+
+The `create_table_iter_pagination_response` function:
+1. Creates a table iterator with appropriate bounds
+2. Collects up to `limit` items
+3. Checks if more items exist after the limit
+4. Returns the last key as `next_key` if more items exist
+5. Returns None as `next_key` if this is the last page
+
+### VIP Score Deployer
+
+The deployer signer is stored as an object's ExtendRef:
+- Created during module initialization
+- Used by vault and order modules to call VIP score functions
+- Provides a stable address for VIP score event feeding
+
+### Type Parameters
+
+The pagination function uses flexible type parameters:
+- `RawKey`: The actual key type stored in the table
+- `EncodedKey`: The key type exposed in the API (may differ for encoding)
+- `RawVal`: The actual value type stored in the table
+- `ResVal`: The response value type (transformed for API)
+
+This allows for type transformations during pagination.

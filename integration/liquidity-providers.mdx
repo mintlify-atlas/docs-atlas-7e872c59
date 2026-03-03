@@ -1,0 +1,402 @@
+---
+title: Liquidity Provider Integration
+description: Learn how to integrate as a liquidity provider to earn fees from trading activity
+---
+
+This guide covers how liquidity providers (LPs) can deposit and withdraw liquidity from the Strat Perpetual DEX vault.
+
+## Overview
+
+Liquidity providers deposit collateral into vaults that serve as the counterparty to traders. LPs interact with the `strat::vault` module to:
+- Deposit liquidity and receive LP shares
+- Request withdrawal of liquidity
+- Withdraw liquidity after the unlock period
+- Monitor their LP positions and earnings
+
+## How the Vault Works
+
+The vault operates on an epoch-based system:
+
+- **Deposits**: Instant - receive LP shares immediately at current share price
+- **Withdrawals**: Require a withdrawal request during cooldown period
+- **Unlock Period**: Withdrawals unlock after N epochs (configurable)
+- **Share Price**: Fluctuates based on trader PnL and collected fees
+
+## Depositing Liquidity
+
+Deposit collateral to receive LP shares.
+
+```move
+public entry fun deposit(
+    account: &signer,
+    metadata: Object<Metadata>,
+    amount: u64
+)
+```
+
+<ParamField path="metadata" type="Object<Metadata>" required>
+  Metadata object of the collateral token to deposit
+</ParamField>
+
+<ParamField path="amount" type="u64" required>
+  Amount of collateral to deposit (in token's smallest unit)
+</ParamField>
+
+**Location**: `strat::vault`
+
+**Process**:
+1. Calculates share amount based on current share price
+2. Validates max mint amount not exceeded
+3. Withdraws collateral from user account
+4. Mints LP shares to user
+5. Updates VIP score
+
+<Note>
+You receive shares based on the current `share_price`. The share price increases as the vault earns fees from trading activity.
+</Note>
+
+## Withdrawing Liquidity
+
+<Steps>
+  <Step title="Request Withdrawal">
+    During the cooldown period, request to withdraw LP shares.
+
+    ```move
+    public entry fun request_withdraw(
+        account: &signer,
+        metadata: Object<Metadata>,
+        share_amount: u64,
+        is_auto_request: bool
+    )
+    ```
+
+    <ParamField path="metadata" type="Object<Metadata>" required>
+      Metadata of the collateral token
+    </ParamField>
+
+    <ParamField path="share_amount" type="u64" required>
+      Number of LP shares to withdraw
+    </ParamField>
+
+    <ParamField path="is_auto_request" type="bool" required>
+      If true, anyone can execute the withdrawal (for automation)
+    </ParamField>
+
+    <Warning>
+    Requests can only be submitted during the cooldown period of each epoch. Requests made during the cooldown period unlock after `unlock_period` epochs.
+    </Warning>
+  </Step>
+
+  <Step title="Wait for Unlock">
+    Wait until the unlock epoch is reached. The unlock epoch is calculated as:
+    
+    ```
+    unlock_epoch = current_epoch + unlock_period
+    ```
+    
+    You can query your pending requests using `get_user_withdraw_requests`.
+  </Step>
+
+  <Step title="Execute Withdrawal">
+    Once the unlock epoch is reached, execute the withdrawal.
+
+    ```move
+    public entry fun withdraw(
+        account: &signer,
+        addr: address,
+        metadata: Object<Metadata>,
+        share_amount: u64,
+        is_auto_request: bool
+    )
+    ```
+
+    <ParamField path="addr" type="address" required>
+      Address of the LP (must match signer for manual requests)
+    </ParamField>
+
+    <ParamField path="metadata" type="Object<Metadata>" required>
+      Metadata of the collateral token
+    </ParamField>
+
+    <ParamField path="share_amount" type="u64" required>
+      Number of shares to withdraw
+    </ParamField>
+
+    <ParamField path="is_auto_request" type="bool" required>
+      Must match the request type (auto or manual)
+    </ParamField>
+
+    <Info>
+    Auto requests can be executed by anyone (useful for keeper bots). Manual requests can only be executed by the owner.
+    </Info>
+  </Step>
+</Steps>
+
+## Canceling Withdrawal Requests
+
+Cancel a withdrawal request before execution.
+
+```move
+public entry fun cancel_withdraw(
+    account: &signer,
+    metadata: Object<Metadata>,
+    unlock_epoch: u64,
+    share_amount: u64,
+    is_auto_request: bool
+)
+```
+
+<ParamField path="unlock_epoch" type="u64" required>
+  The epoch when the withdrawal would unlock
+</ParamField>
+
+<ParamField path="share_amount" type="u64" required>
+  Amount of shares to cancel (can be partial)
+</ParamField>
+
+<ParamField path="is_auto_request" type="bool" required>
+  Must match the original request type
+</ParamField>
+
+## Advanced: Liquidity Buffer
+
+Liquidity buffer providers are special addresses that can provide additional liquidity to absorb trader PnL without earning trading rewards.
+
+### Deposit Liquidity Buffer
+
+```move
+public entry fun deposit_liquidity_buffer(
+    account: &signer,
+    metadata: Object<Metadata>,
+    amount: u64
+)
+```
+
+<Warning>
+Only authorized liquidity buffer providers can call this function. Contact governance to become a liquidity buffer provider.
+</Warning>
+
+### Withdraw Liquidity Buffer
+
+```move
+public entry fun withdraw_liquidity_buffer(
+    account: &signer,
+    metadata: Object<Metadata>,
+    amount: u64
+)
+```
+
+## Epoch Management
+
+Keepers can trigger epoch transitions when an epoch ends.
+
+```move
+public entry fun start_new_epoch(_account: &signer)
+```
+
+This function:
+- Checks if the current epoch has ended
+- Increments epoch number
+- Resets cooldown and epoch end timestamps
+- Updates PnL snapshots for all collaterals
+
+<Info>
+This is a permissionless function - anyone can call it when an epoch ends.
+</Info>
+
+### Request Snapshot
+
+```move
+public entry fun request_snapshot(
+    _account: &signer,
+    metadata: Object<Metadata>
+)
+```
+
+Trigger an open PnL snapshot update during the cooldown period.
+
+## Query Functions
+
+### Get LP Balance
+
+Check your available LP share balance.
+
+```move
+#[view]
+public fun get_liquidity_balance(
+    user_addr: address,
+    collateral_metadata: Object<Metadata>
+): u64
+```
+
+Returns the available balance (excluding pending withdrawals).
+
+### Get Withdrawal Requests
+
+View all pending withdrawal requests for a user.
+
+```move
+#[view]
+public fun get_user_withdraw_requests(
+    user_addr: address,
+    limit: u64,
+    key: Option<vector<u8>>
+): PaginationResponse<vector<u8>, WithdrawRequestResponse>
+```
+
+### Get Share Price
+
+Check the current LP share price.
+
+```move
+#[view]
+public fun get_share_price(
+    collateral_metadata: Object<Metadata>
+): BigDecimal
+```
+
+Share price = `1 + reward_per_token - max(0, pnl_per_token)`
+
+### Get Max Mint/Burn Amounts
+
+Check deposit and withdrawal limits.
+
+```move
+#[view]
+public fun get_max_mint_amount(collateral_metadata: Object<Metadata>): u128
+
+#[view]
+public fun get_max_burn_amount(collateral_metadata: Object<Metadata>): u128
+```
+
+### Get Epoch Information
+
+Retrieve current epoch configuration.
+
+```move
+public fun get_epoch_info(): (
+    u64, // epoch
+    u64, // epoch_start_timestamp
+    u64, // cooldown_start_timestamp
+    u64, // epoch_end_timestamp
+    u64, // unlock_period
+    u64, // epoch_duration
+    u64, // cooldown_start_after
+    u64  // open_pnl_snapshot_interval
+)
+```
+
+### Get Collateral Information
+
+Get all registered collaterals and their info.
+
+```move
+#[view]
+public fun get_collateral_infos(): vector<CollateralInfo>
+```
+
+Returns information including:
+- Current supply
+- Max supply
+- Share price
+- Epoch state (avg open PnL, request count, last update)
+
+## Integration Example
+
+Here's a complete example of depositing and withdrawing liquidity:
+
+```move
+script {
+    use strat::vault;
+    use initia_std::object;
+    use initia_std::option;
+
+    fun provide_liquidity(account: &signer) {
+        let usdc_metadata = object::address_to_object(@0xUSDC_ADDRESS);
+        
+        // 1. Deposit 10,000 USDC
+        vault::deposit(
+            account,
+            usdc_metadata,
+            10_000_000000 // 10,000 USDC with 6 decimals
+        );
+        
+        // 2. Later, during cooldown period, request withdrawal of half
+        let user_addr = std::signer::address_of(account);
+        let balance = vault::get_liquidity_balance(user_addr, usdc_metadata);
+        
+        vault::request_withdraw(
+            account,
+            usdc_metadata,
+            balance / 2,
+            false // Manual request (only I can execute)
+        );
+        
+        // 3. After unlock epoch, withdraw
+        vault::withdraw(
+            account,
+            user_addr,
+            usdc_metadata,
+            balance / 2,
+            false // Manual request
+        );
+    }
+}
+```
+
+## Understanding PnL and Share Price
+
+### How LPs Earn
+
+- **Trading Fees**: Collected from all trades (included in share price)
+- **Funding Fees**: Paid by traders on leveraged positions
+- **Rollover Fees**: Daily holding fees from traders
+
+### How LPs Lose
+
+- **Trader Profits**: When traders win, vault pays out (decreases share price)
+- **Liquidation Gaps**: If liquidation happens below/above liquidation price
+
+### PnL Per Token
+
+`pnl_per_token` represents the liquidity buffer:
+- **Negative**: Vault has excess liquidity (buffer)
+- **Positive**: Traders have unrealized profits
+
+Share price adjusts for trader PnL to ensure fair entry/exit for LPs.
+
+## Best Practices
+
+1. **Deposit During Low Volatility**: Share price is more stable
+2. **Monitor Open Interest**: High OI means more trader exposure
+3. **Use Auto Requests**: Let keepers handle withdrawal execution
+4. **Plan Around Epochs**: Submit withdrawal requests during cooldown
+5. **Diversify Collateral**: Spread deposits across different collateral types
+6. **Track Share Price**: Monitor your returns over time
+7. **Understand PnL Snapshots**: Withdrawals use epoch-end PnL snapshots
+
+## Risk Considerations
+
+<Warning>
+Liquidity providers are exposed to trader PnL:
+- If traders make profits, LP share value decreases
+- If traders take losses, LP share value increases
+- Extreme market volatility can impact returns
+</Warning>
+
+### Mitigation Strategies
+
+- **Max Supply Controls**: Limits total vault size
+- **Max PnL Per Token**: Caps trader profits per epoch
+- **Liquidity Buffer**: Absorbs small trader profits
+- **Dynamic Spread**: Reduces risk during high volatility
+
+## Monitoring Your Position
+
+Track these metrics:
+
+1. **Share Balance**: Your LP shares
+2. **Share Price**: Current value per share
+3. **Unrealized PnL**: `(current_share_price - entry_price) * shares`
+4. **Pending Withdrawals**: Locked shares in withdrawal requests
+5. **Vault Utilization**: `current_supply / max_supply`

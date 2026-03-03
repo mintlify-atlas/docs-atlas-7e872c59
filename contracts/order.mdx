@@ -1,0 +1,544 @@
+---
+title: "Order Module"
+description: "Core trading interface for creating and managing perpetual orders"
+---
+
+The `order` module provides the primary user interface for trading on the Strat Perpetual DEX. Users can create market, limit, and stop orders, manage positions, and handle collateral.
+
+## Data Structures
+
+### OpenOrder
+
+```move
+struct OpenOrder has store {
+    order_id: u64,
+    order_type: OpenOrderType,
+    asset_id: u64,
+    user_addr: address,
+    collateral_metadata: Object<Metadata>,
+    collateral_amount: u64,
+    target_price: BigDecimal,
+    tp_price: BigDecimal,
+    sl_price: BigDecimal,
+    leverage: BigDecimal,
+    is_long_position: bool,
+    last_update_timestamp: u64
+}
+```
+
+### CloseOrder
+
+```move
+struct CloseOrder has store {
+    order_id: u64,
+    user_addr: address,
+    asset_id: u64,
+    collateral_metadata: Object<Metadata>,
+    is_long_position: bool,
+    target_price: BigDecimal,
+    max_slippage: BigDecimal,
+    collateral_close_amount: u64,
+    size: BigDecimal,
+    last_update_timestamp: u64
+}
+```
+
+### RemoveCollateralOrder
+
+```move
+struct RemoveCollateralOrder has store {
+    order_id: u64,
+    user_addr: address,
+    asset_id: u64,
+    collateral_metadata: Object<Metadata>,
+    is_long_position: bool,
+    collateral_amount: u64,
+    last_update_timestamp: u64
+}
+```
+
+## Opening Positions
+
+### create_market_open_order
+
+Creates a market order to open a position, executed immediately.
+
+```move
+public entry fun create_market_open_order(
+    account: &signer,
+    asset_id: u64,
+    collateral_metadata: Object<Metadata>,
+    collateral_amount: u64,
+    target_price: BigDecimal,
+    tp_price: BigDecimal,
+    sl_price: BigDecimal,
+    leverage: BigDecimal,
+    is_long_position: bool,
+    max_slippage: BigDecimal
+)
+```
+
+<ParamField path="account" type="&signer" required>
+  User account signer
+</ParamField>
+
+<ParamField path="asset_id" type="u64" required>
+  ID of the asset to trade
+</ParamField>
+
+<ParamField path="collateral_metadata" type="Object<Metadata>" required>
+  Metadata object for the collateral token
+</ParamField>
+
+<ParamField path="collateral_amount" type="u64" required>
+  Amount of collateral to deposit
+</ParamField>
+
+<ParamField path="target_price" type="BigDecimal" required>
+  Expected execution price (for slippage checking)
+</ParamField>
+
+<ParamField path="tp_price" type="BigDecimal" required>
+  Take profit price (0 for no TP)
+</ParamField>
+
+<ParamField path="sl_price" type="BigDecimal" required>
+  Stop loss price (0 for no SL)
+</ParamField>
+
+<ParamField path="leverage" type="BigDecimal" required>
+  Desired leverage multiplier
+</ParamField>
+
+<ParamField path="is_long_position" type="bool" required>
+  True for long, false for short
+</ParamField>
+
+<ParamField path="max_slippage" type="BigDecimal" required>
+  Maximum acceptable slippage
+</ParamField>
+
+### create_limit_open_order
+
+Creates a limit order that executes when price reaches target.
+
+```move
+public entry fun create_limit_open_order(
+    account: &signer,
+    asset_id: u64,
+    collateral_metadata: Object<Metadata>,
+    collateral_amount: u64,
+    target_price: BigDecimal,
+    tp_price: BigDecimal,
+    sl_price: BigDecimal,
+    leverage: BigDecimal,
+    is_long_position: bool
+)
+```
+
+<ParamField path="account" type="&signer" required>
+  User account signer
+</ParamField>
+
+<ParamField path="asset_id" type="u64" required>
+  ID of the asset to trade
+</ParamField>
+
+<ParamField path="collateral_metadata" type="Object<Metadata>" required>
+  Metadata object for the collateral token
+</ParamField>
+
+<ParamField path="collateral_amount" type="u64" required>
+  Amount of collateral to deposit
+</ParamField>
+
+<ParamField path="target_price" type="BigDecimal" required>
+  Limit price to trigger order execution
+</ParamField>
+
+<ParamField path="tp_price" type="BigDecimal" required>
+  Take profit price (0 for no TP)
+</ParamField>
+
+<ParamField path="sl_price" type="BigDecimal" required>
+  Stop loss price (0 for no SL)
+</ParamField>
+
+<ParamField path="leverage" type="BigDecimal" required>
+  Desired leverage multiplier
+</ParamField>
+
+<ParamField path="is_long_position" type="bool" required>
+  True for long, false for short
+</ParamField>
+
+### create_stop_open_order
+
+Creates a stop order that triggers when price crosses target.
+
+```move
+public entry fun create_stop_open_order(
+    account: &signer,
+    asset_id: u64,
+    collateral_metadata: Object<Metadata>,
+    collateral_amount: u64,
+    target_price: BigDecimal,
+    tp_price: BigDecimal,
+    sl_price: BigDecimal,
+    leverage: BigDecimal,
+    is_long_position: bool
+)
+```
+
+<ParamField path="account" type="&signer" required>
+  User account signer
+</ParamField>
+
+<ParamField path="asset_id" type="u64" required>
+  ID of the asset to trade
+</ParamField>
+
+<ParamField path="collateral_metadata" type="Object<Metadata>" required>
+  Metadata object for the collateral token
+</ParamField>
+
+<ParamField path="collateral_amount" type="u64" required>
+  Amount of collateral to deposit
+</ParamField>
+
+<ParamField path="target_price" type="BigDecimal" required>
+  Stop price to trigger order execution
+</ParamField>
+
+<ParamField path="tp_price" type="BigDecimal" required>
+  Take profit price (0 for no TP)
+</ParamField>
+
+<ParamField path="sl_price" type="BigDecimal" required>
+  Stop loss price (0 for no SL)
+</ParamField>
+
+<ParamField path="leverage" type="BigDecimal" required>
+  Desired leverage multiplier
+</ParamField>
+
+<ParamField path="is_long_position" type="bool" required>
+  True for long, false for short
+</ParamField>
+
+## Managing Open Orders
+
+### cancel_open_order
+
+Cancels a pending open order and refunds collateral.
+
+```move
+public entry fun cancel_open_order(
+    account: &signer,
+    order_id: u64
+)
+```
+
+<ParamField path="account" type="&signer" required>
+  User account signer (must be order owner)
+</ParamField>
+
+<ParamField path="order_id" type="u64" required>
+  ID of the order to cancel
+</ParamField>
+
+### update_open_order
+
+Updates target price, TP, and SL for a pending limit or stop order.
+
+```move
+public entry fun update_open_order(
+    account: &signer,
+    order_id: u64,
+    target_price: BigDecimal,
+    tp_price: BigDecimal,
+    sl_price: BigDecimal
+)
+```
+
+<ParamField path="account" type="&signer" required>
+  User account signer (must be order owner)
+</ParamField>
+
+<ParamField path="order_id" type="u64" required>
+  ID of the order to update
+</ParamField>
+
+<ParamField path="target_price" type="BigDecimal" required>
+  New target/trigger price
+</ParamField>
+
+<ParamField path="tp_price" type="BigDecimal" required>
+  New take profit price
+</ParamField>
+
+<ParamField path="sl_price" type="BigDecimal" required>
+  New stop loss price
+</ParamField>
+
+## Closing Positions
+
+### create_market_close_order
+
+Creates a market order to close an existing position.
+
+```move
+public entry fun create_market_close_order(
+    account: &signer,
+    position_id: u64,
+    target_price: BigDecimal,
+    max_slippage: BigDecimal,
+    collateral_close_amount: Option<u64>
+)
+```
+
+<ParamField path="account" type="&signer" required>
+  User account signer (must be position owner)
+</ParamField>
+
+<ParamField path="position_id" type="u64" required>
+  ID of the position to close
+</ParamField>
+
+<ParamField path="target_price" type="BigDecimal" required>
+  Expected execution price
+</ParamField>
+
+<ParamField path="max_slippage" type="BigDecimal" required>
+  Maximum acceptable slippage
+</ParamField>
+
+<ParamField path="collateral_close_amount" type="Option<u64>" required>
+  Amount of collateral to close (None to close entire position)
+</ParamField>
+
+### cancel_market_close_order
+
+Cancels a pending market close order.
+
+```move
+public entry fun cancel_market_close_order(
+    account: &signer,
+    order_id: u64
+)
+```
+
+<ParamField path="account" type="&signer" required>
+  User account signer (must be order owner)
+</ParamField>
+
+<ParamField path="order_id" type="u64" required>
+  ID of the close order to cancel
+</ParamField>
+
+## Position Management
+
+### update_position
+
+Updates take profit and stop loss prices for an existing position.
+
+```move
+public entry fun update_position(
+    account: &signer,
+    position_id: u64,
+    new_tp_price: BigDecimal,
+    new_sl_price: BigDecimal
+)
+```
+
+<ParamField path="account" type="&signer" required>
+  User account signer (must be position owner)
+</ParamField>
+
+<ParamField path="position_id" type="u64" required>
+  ID of the position to update
+</ParamField>
+
+<ParamField path="new_tp_price" type="BigDecimal" required>
+  New take profit price (0 to disable)
+</ParamField>
+
+<ParamField path="new_sl_price" type="BigDecimal" required>
+  New stop loss price (0 to disable)
+</ParamField>
+
+### add_collateral
+
+Adds additional collateral to an existing position to reduce leverage.
+
+```move
+public entry fun add_collateral(
+    account: &signer,
+    position_id: u64,
+    collateral_amount: u64
+)
+```
+
+<ParamField path="account" type="&signer" required>
+  User account signer (must be position owner)
+</ParamField>
+
+<ParamField path="position_id" type="u64" required>
+  ID of the position to add collateral to
+</ParamField>
+
+<ParamField path="collateral_amount" type="u64" required>
+  Amount of collateral to add
+</ParamField>
+
+### remove_collateral
+
+Creates an order to remove collateral from a position (increases leverage).
+
+```move
+public entry fun remove_collateral(
+    account: &signer,
+    position_id: u64,
+    collateral_amount: u64
+)
+```
+
+<ParamField path="account" type="&signer" required>
+  User account signer (must be position owner)
+</ParamField>
+
+<ParamField path="position_id" type="u64" required>
+  ID of the position to remove collateral from
+</ParamField>
+
+<ParamField path="collateral_amount" type="u64" required>
+  Amount of collateral to remove
+</ParamField>
+
+### cancel_remove_collateral_order
+
+Cancels a pending remove collateral order.
+
+```move
+public entry fun cancel_remove_collateral_order(
+    account: &signer,
+    order_id: u64
+)
+```
+
+<ParamField path="account" type="&signer" required>
+  User account signer (must be order owner)
+</ParamField>
+
+<ParamField path="order_id" type="u64" required>
+  ID of the remove collateral order to cancel
+</ParamField>
+
+## View Functions
+
+### get_market_timeout
+
+Returns the current market order timeout duration.
+
+```move
+#[view]
+public fun get_market_timeout(): u64
+```
+
+<ResponseField name="timeout" type="u64">
+  Market order timeout in seconds
+</ResponseField>
+
+### get_market_open_orders
+
+Retrieves a paginated list of all market open orders.
+
+```move
+#[view]
+public fun get_market_open_orders(
+    limit: u64,
+    key: Option<u64>
+): PaginationResponse<u64, OpenOrderResponse>
+```
+
+<ParamField path="limit" type="u64" required>
+  Maximum number of orders to return
+</ParamField>
+
+<ParamField path="key" type="Option<u64>">
+  Pagination cursor from previous response
+</ParamField>
+
+<ResponseField name="response" type="PaginationResponse<u64, OpenOrderResponse>">
+  Paginated list of market open orders
+</ResponseField>
+
+### get_user_open_orders
+
+Retrieves all open orders for a specific user.
+
+```move
+#[view]
+public fun get_user_open_orders(
+    user_addr: address,
+    limit: u64,
+    key: Option<u64>
+): PaginationResponse<u64, OpenOrderResponse>
+```
+
+<ParamField path="user_addr" type="address" required>
+  Address of the user
+</ParamField>
+
+<ParamField path="limit" type="u64" required>
+  Maximum number of orders to return
+</ParamField>
+
+<ParamField path="key" type="Option<u64>">
+  Pagination cursor from previous response
+</ParamField>
+
+<ResponseField name="response" type="PaginationResponse<u64, OpenOrderResponse>">
+  Paginated list of user's open orders
+</ResponseField>
+
+### get_market_close_orders
+
+Retrieves a paginated list of all market close orders.
+
+```move
+#[view]
+public fun get_market_close_orders(
+    limit: u64,
+    key: Option<vector<u8>>
+): PaginationResponse<vector<u8>, CloseOrderResponse>
+```
+
+### get_user_close_orders
+
+Retrieves all close orders for a specific user.
+
+```move
+#[view]
+public fun get_user_close_orders(
+    user_addr: address,
+    limit: u64,
+    key: Option<vector<u8>>
+): PaginationResponse<vector<u8>, CloseOrderResponse>
+```
+
+## Events
+
+The order module emits events for all state changes:
+
+- `CreateOpenOrderEvent` - When an open order is created
+- `UpdateOpenOrderEvent` - When an open order is updated
+- `DeleteOpenOrderEvent` - When an open order is cancelled or executed
+- `CreateCloseOrderEvent` - When a close order is created
+- `DeleteCloseOrderEvent` - When a close order is cancelled or executed
+- `OpenPositionEvent` - When a position is opened
+- `ClosePositionEvent` - When a position is closed
+- `UpdatePositionEvent` - When position TP/SL is updated
+- `AddCollateralEvent` - When collateral is added to a position
+- `CreateRemoveCollateralOrderEvent` - When a remove collateral order is created
+- `DeleteRemoveCollateralOrderEvent` - When a remove collateral order is cancelled or executed

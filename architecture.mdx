@@ -1,0 +1,377 @@
+---
+title: System Architecture
+description: Understanding the modular contract structure of Strat Perpetual DEX
+---
+
+# System Architecture
+
+Strat Perpetual DEX is built with a **modular architecture** where each smart contract has a single, well-defined responsibility. This design promotes code clarity, security, and maintainability.
+
+## Architecture Diagram
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      Governance (gov)                        │
+│         Central configuration & system management            │
+└────────────────────────┬────────────────────────────────────┘
+                         │
+        ┌────────────────┼────────────────┐
+        │                │                │
+        ▼                ▼                ▼
+┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+│Oracle        │  │Pair          │  │Vault         │
+│Aggregator    │  │Configuration │  │(LP & Fees)   │
+└──────┬───────┘  └──────┬───────┘  └──────┬───────┘
+       │                 │                  │
+       │     ┌───────────┴──────────┐       │
+       │     │                      │       │
+       ▼     ▼                      ▼       ▼
+┌─────────────────────────────────────────────────┐
+│              Order Management (order)            │
+│         Primary trader interface                 │
+└──────────────────┬──────────────────────────────┘
+                   │
+       ┌───────────┼───────────┐
+       │           │           │
+       ▼           ▼           ▼
+┌──────────┐ ┌──────────┐ ┌──────────┐
+│Position  │ │Order     │ │Referral  │
+│Tracking  │ │Executor  │ │System    │
+└──────────┘ └──────────┘ └──────────┘
+```
+
+## Core Modules
+
+### 1. Governance Module (`gov.move`)
+
+**Purpose**: Centralized configuration management for the entire system.
+
+**Key Responsibilities**:
+- Initialize all module capabilities
+- Update system-wide parameters
+- Register trading pairs and collateral types
+- Configure oracle sources
+- Manage protocol fee collection
+
+**Code Example** (gov.move:42-65):
+```move
+fun init_module(publisher: &signer) {
+    let order_capability = order::initialize(publisher);
+    let order_executor_capability = order_executor::initialize(publisher);
+    let oracle_aggregator_capability = oracle_aggregator::initialize(publisher);
+    let pair_capability = pair::initialize(publisher);
+    let position_capability = position::initialize(publisher);
+    let vault_capability = vault::initialize(publisher);
+    let referral_capability = referral::initialize(publisher);
+
+    move_to(
+        publisher,
+        ModuleStore {
+            gov_address: signer::address_of(publisher),
+            protocol_fee_address: signer::address_of(publisher),
+            order_capability,
+            order_executor_capability,
+            oracle_aggregator_capability,
+            pair_capability,
+            position_capability,
+            vault_capability,
+            referral_capability
+        }
+    );
+}
+```
+
+<Info>
+  The governance module holds capability objects for all other modules, enforcing that only governance can modify critical system parameters.
+</Info>
+
+---
+
+### 2. Order Module (`order.move`)
+
+**Purpose**: Primary interface for traders to interact with the exchange.
+
+**Key Responsibilities**:
+- Create market, limit, and stop orders
+- Manage user collateral during trades
+- Open and close positions
+- Add/remove position collateral
+- Set take-profit and stop-loss prices
+
+**Order Types** (order.move:69-73):
+```move
+enum OpenOrderType has copy, drop, store {
+    Market(BigDecimal), // Max slippage
+    Stop,
+    Limit
+}
+```
+
+**User Entry Functions**:
+- `create_market_open_order()` - Immediate execution with slippage protection
+- `create_limit_open_order()` - Execute when price reaches target
+- `create_stop_open_order()` - Stop-loss or stop-entry orders
+- `create_market_close_order()` - Close position at market price
+- `update_position()` - Update TP/SL prices
+- `add_collateral()` - Increase position margin
+- `remove_collateral()` - Decrease position margin
+
+<Note>
+  All user collateral is held in the Order module during active trades, ensuring proper accounting and security.
+</Note>
+
+---
+
+### 3. Position Module (`position.move`)
+
+**Purpose**: Manage and track all open positions.
+
+**Key Responsibilities**:
+- Store position state (size, leverage, entry price)
+- Calculate current PnL
+- Track accumulated fees (funding, rollover)
+- Update leverage after collateral changes
+- Validate take-profit and stop-loss prices
+
+**Position Structure** (position.move:55-78):
+```move
+struct Position has copy, drop, store {
+    position_id: u64,
+    asset_id: u64,
+    user_addr: address,
+    collateral_metadata: Object<Metadata>,
+    collateral_amount: u64,
+    open_price: BigDecimal,
+    tp_price: BigDecimal,
+    sl_price: BigDecimal,
+    initial_leverage: BigDecimal,
+    leverage: BigDecimal,
+    margin_value: BigDecimal,
+    last_updated_accumulated_rollover_fee_per_oi: SignedBigDecimal,
+    last_updated_accumulated_funding_fee_per_oi: SignedBigDecimal,
+    last_calculated_rollover_fee: SignedBigDecimal,
+    last_calculated_funding_fee: SignedBigDecimal,
+    size: BigDecimal,
+    is_long_position: bool
+}
+```
+
+---
+
+### 4. Vault Module (`vault.move`)
+
+**Purpose**: Manage liquidity provision and collateral.
+
+**Key Responsibilities**:
+- Accept LP deposits and issue vault tokens
+- Handle withdrawal requests with epoch-based unlocking
+- Collect trading fees and liquidation fees
+- Manage PnL distribution between traders and LPs
+- Track open interest and open PnL
+
+**Economics**:
+- LPs provide collateral to back trader positions
+- When traders profit (positive net PnL), LP token price decreases
+- When traders lose (negative net PnL), LP token price remains stable or increases
+- Fees collected: opening fees, liquidation fees, protocol fees
+
+**LP Token Pricing** (vault.move:1430-1433):
+```move
+// lp price = 1 + reward_per_token - max(0, pnl_per_token)
+fun max_share_price(self: &LiquidityInfo): BigDecimal {
+    bigdecimal::one().add(self.reward_per_token)
+}
+```
+
+<Warning>
+  The vault implements an epoch-based withdrawal system with cooldown periods to prevent manipulation and ensure fair LP token pricing.
+</Warning>
+
+---
+
+### 5. Oracle Aggregator Module (`oracle_aggregator.move`)
+
+**Purpose**: Fetch and normalize price data from multiple oracle sources.
+
+**Key Responsibilities**:
+- Integrate with Stork Oracle and other price feeds
+- Normalize decimals for consistency
+- Track market status (open/closed hours)
+- Provide price data to order execution logic
+
+**Supported Oracle Types** (oracle_aggregator.move:53-56):
+```move
+enum OracleType has copy, drop, store {
+    Stable,  // For stablecoins (fixed $1)
+    Stork    // Stork Oracle integration
+}
+```
+
+<Info>
+  The oracle aggregator ensures all price data is normalized to consistent decimals before use in calculations, preventing precision errors.
+</Info>
+
+---
+
+### 6. Order Executor Module (`order_executor.move`)
+
+**Purpose**: Execute pending orders via keeper bots.
+
+**Key Responsibilities**:
+- Process market orders when conditions are met
+- Trigger limit orders at target prices
+- Execute stop orders
+- Handle automated TP/SL closures
+- Perform liquidations
+
+**Designed for Bots**:
+```
+Keeper Bot → order_executor::execute_open_order(order_id, price, timestamp)
+          → Validates conditions
+          → Executes order
+          → Updates position state
+```
+
+---
+
+### 7. Pair Module (`pair.move`)
+
+**Purpose**: Configure trading pairs and fee structures.
+
+**Key Responsibilities**:
+- Define trading pair parameters (leverage limits, position minimums)
+- Calculate funding fees based on open interest imbalance
+- Calculate rollover fees (borrowing costs)
+- Manage dynamic spreads
+- Track group-level exposure limits
+
+---
+
+### 8. Referral Module (`referral.move`)
+
+**Purpose**: Track referral relationships.
+
+**Key Responsibilities**:
+- Map referees to referrers
+- Enable referral-based rewards and incentives
+
+---
+
+## Supporting Libraries
+
+### Signed BigDecimal (`signed_bigdecimal.move`)
+
+Provides signed decimal math operations for precise PnL calculations:
+
+```move
+struct SignedBigDecimal has copy, drop, store {
+    magnitude: BigDecimal,
+    is_positive: bool
+}
+```
+
+<Tip>
+  Used throughout the codebase for precise financial calculations where negative values are required (PnL, funding fees, etc.).
+</Tip>
+
+### Utils (`utils.move`)
+
+Shared utility functions to reduce code duplication:
+- Pagination helpers
+- Table iteration
+- Common validation logic
+
+---
+
+## Data Flow: Opening a Position
+
+<Steps>
+  <Step title="Trader Creates Order">
+    User calls `order::create_market_open_order()` with:
+    - Asset ID (e.g., BTC)
+    - Collateral amount and type
+    - Leverage
+    - TP/SL prices
+    
+    Collateral is withdrawn from user and deposited into Order module.
+  </Step>
+
+  <Step title="Order Stored">
+    Order is stored in the appropriate order table:
+    - `market_open_orders` for immediate execution
+    - `limit_open_orders` for limit orders
+    - `stop_open_orders` for stop orders
+  </Step>
+
+  <Step title="Keeper Bot Executes">
+    Keeper calls `order_executor::execute_open_order()` with:
+    - Order ID
+    - Current market price (from oracle)
+    - Oracle timestamp
+    - Collateral price
+    
+    Executor validates:
+    - Price conditions met
+    - Slippage within limits
+    - Market is open
+    - Exposure limits not exceeded
+  </Step>
+
+  <Step title="Position Created">
+    If valid, `order::execute_open_order()` (friend function):
+    - Calculates position size based on leverage
+    - Creates Position record in position module
+    - Updates vault open interest
+    - Emits OpenPositionEvent
+  </Step>
+</Steps>
+
+## Security Features
+
+<CardGroup cols={2}>
+  <Card title="Friend Functions" icon="lock">
+    Critical functions use Move's `friend` visibility to restrict access only to authorized modules
+  </Card>
+  
+  <Card title="Capability Pattern" icon="key">
+    Governance capabilities ensure only authorized accounts can modify system parameters
+  </Card>
+  
+  <Card title="Precise Math" icon="calculator">
+    SignedBigDecimal library prevents rounding errors in financial calculations
+  </Card>
+  
+  <Card title="State Validation" icon="shield-check">
+    Extensive assertions validate state transitions and prevent invalid operations
+  </Card>
+</CardGroup>
+
+## Module Dependencies
+
+External dependencies (Move.toml:5-7):
+```toml
+[dependencies]
+InitiaStdlib = { git = "https://github.com/initia-labs/movevm.git", subdir = "precompile/modules/initia_stdlib", rev = "main" }
+stork = { git = "https://github.com/Stork-Oracle/stork-external.git", subdir = "chains/initia_minimove/contracts", rev = "main" }
+```
+
+## Named Addresses
+
+```toml
+[addresses]
+std = "0x1"
+strat = "_"        # Main protocol
+vip_score = "_"   # VIP scoring
+point = "_"       # Points system
+stork = "_"       # Stork oracle
+```
+
+## Conclusion
+
+The modular architecture of Strat Perpetual DEX provides:
+- **Clear separation of concerns** - Each module has a single responsibility
+- **Maintainability** - Changes to one module minimally impact others
+- **Security** - Restricted access via friend functions and capabilities
+- **Extensibility** - New features can be added without major refactoring
+
+This design makes the codebase easier to audit, test, and evolve over time.

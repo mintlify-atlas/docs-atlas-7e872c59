@@ -1,0 +1,446 @@
+---
+title: "Position Module"
+description: "Position tracking, PnL calculations, and position lifecycle management"
+---
+
+The `position` module manages all open positions in the Strat Perpetual DEX. It handles position creation, updates, PnL calculations, and maintains the relationship between collateral, leverage, and trade size.
+
+## Data Structures
+
+### Position
+
+```move
+struct Position has copy, drop, store {
+    position_id: u64,
+    asset_id: u64,
+    user_addr: address,
+    collateral_metadata: Object<Metadata>,
+    collateral_amount: u64,
+    open_price: BigDecimal,
+    tp_price: BigDecimal,
+    sl_price: BigDecimal,
+    initial_leverage: BigDecimal,
+    leverage: BigDecimal,
+    margin_value: BigDecimal,
+    last_updated_accumulated_rollover_fee_per_oi: SignedBigDecimal,
+    last_updated_accumulated_funding_fee_per_oi: SignedBigDecimal,
+    last_calculated_rollover_fee: SignedBigDecimal,
+    last_calculated_funding_fee: SignedBigDecimal,
+    size: BigDecimal,
+    is_long_position: bool
+}
+```
+
+<ResponseField name="position_id" type="u64">
+  Unique identifier for the position
+</ResponseField>
+
+<ResponseField name="asset_id" type="u64">
+  ID of the trading asset
+</ResponseField>
+
+<ResponseField name="user_addr" type="address">
+  Address of the position owner
+</ResponseField>
+
+<ResponseField name="collateral_metadata" type="Object<Metadata>">
+  Metadata object for collateral token
+</ResponseField>
+
+<ResponseField name="collateral_amount" type="u64">
+  Amount of collateral backing this position
+</ResponseField>
+
+<ResponseField name="open_price" type="BigDecimal">
+  Average entry price (size-weighted for merged positions)
+</ResponseField>
+
+<ResponseField name="tp_price" type="BigDecimal">
+  Take profit price (0 if not set)
+</ResponseField>
+
+<ResponseField name="sl_price" type="BigDecimal">
+  Stop loss price (0 if not set)
+</ResponseField>
+
+<ResponseField name="initial_leverage" type="BigDecimal">
+  Leverage at position opening
+</ResponseField>
+
+<ResponseField name="leverage" type="BigDecimal">
+  Current effective leverage
+</ResponseField>
+
+<ResponseField name="margin_value" type="BigDecimal">
+  Total margin value in USD
+</ResponseField>
+
+<ResponseField name="size" type="BigDecimal">
+  Position size in asset units
+</ResponseField>
+
+<ResponseField name="is_long_position" type="bool">
+  True for long, false for short
+</ResponseField>
+
+### PositionKey
+
+```move
+struct PositionKey has copy, drop, store {
+    user_addr: address,
+    asset_id: vector<u8>,
+    collateral_metadata: address,
+    is_long_position: bool
+}
+```
+
+Unique key for identifying positions. A user can have at most one long and one short position per asset-collateral pair.
+
+### Config
+
+```move
+struct Config has key {
+    max_pnl_ratio: BigDecimal
+}
+```
+
+<ResponseField name="max_pnl_ratio" type="BigDecimal">
+  Maximum PnL ratio relative to position size before TP is automatically capped (default: 9x)
+</ResponseField>
+
+## View Functions
+
+### get_max_pnl_ratio
+
+Returns the maximum PnL ratio configuration.
+
+```move
+#[view]
+public fun get_max_pnl_ratio(): BigDecimal
+```
+
+<ResponseField name="ratio" type="BigDecimal">
+  Maximum PnL ratio (e.g., 9.0 means max 900% profit)
+</ResponseField>
+
+### check_positions_exists
+
+Checks if positions with given IDs exist.
+
+```move
+#[view]
+public fun check_positions_exists(
+    position_ids: vector<u64>
+): vector<bool>
+```
+
+<ParamField path="position_ids" type="vector<u64>" required>
+  List of position IDs to check
+</ParamField>
+
+<ResponseField name="exists" type="vector<bool>">
+  Boolean array indicating existence of each position
+</ResponseField>
+
+### get_user_positions
+
+Retrieves all positions for a specific user with pagination.
+
+```move
+#[view]
+public fun get_user_positions(
+    user_addr: address,
+    limit: u64,
+    key: Option<vector<u8>>
+): PaginationResponse<vector<u8>, PositionResponse>
+```
+
+<ParamField path="user_addr" type="address" required>
+  Address of the user
+</ParamField>
+
+<ParamField path="limit" type="u64" required>
+  Maximum number of positions to return
+</ParamField>
+
+<ParamField path="key" type="Option<vector<u8>>">
+  Pagination cursor from previous response
+</ParamField>
+
+<ResponseField name="response" type="PaginationResponse<vector<u8>, PositionResponse>">
+  Paginated list of user positions
+</ResponseField>
+
+## Friend Functions
+
+These functions are called by the `order` module during position lifecycle operations.
+
+### add_position
+
+Creates a new position or merges with an existing position.
+
+```move
+public(friend) fun add_position(
+    user_addr: address,
+    asset_id: u64,
+    collateral_metadata: Object<Metadata>,
+    collateral_amount: u64,
+    open_price: BigDecimal,
+    tp_price: BigDecimal,
+    sl_price: BigDecimal,
+    leverage: BigDecimal,
+    margin_value: BigDecimal,
+    acc_rollover_fee: SignedBigDecimal,
+    acc_funding_fee: SignedBigDecimal,
+    size: BigDecimal,
+    is_long_position: bool
+)
+```
+
+When merging positions:
+- Open price is size-weighted average
+- Leverage is collateral-weighted average
+- TP/SL are updated to new values
+- Fees are recalculated
+
+### close_position
+
+Closes a position partially or fully.
+
+```move
+public(friend) fun close_position(
+    user_addr: address,
+    asset_id: u64,
+    collateral_metadata: Object<Metadata>,
+    collateral_close_amount: u64,
+    is_long_position: bool
+): BigDecimal
+```
+
+<ResponseField name="size_closed" type="BigDecimal">
+  Amount of position size that was closed
+</ResponseField>
+
+Partial closes proportionally reduce:
+- Position size
+- Margin value
+- Collateral amount
+- Accumulated fees
+
+### add_collateral
+
+Adds collateral to an existing position, reducing leverage.
+
+```move
+public(friend) fun add_collateral(
+    user_addr: address,
+    asset_id: u64,
+    collateral_metadata: Object<Metadata>,
+    collateral_amount: u64,
+    is_long_position: bool
+)
+```
+
+Leverage calculation:
+```
+new_leverage = (old_leverage * old_collateral) / (old_collateral + added_collateral)
+```
+
+### remove_collateral
+
+Removes collateral from a position, increasing leverage.
+
+```move
+public(friend) fun remove_collateral(
+    user_addr: address,
+    asset_id: u64,
+    collateral_metadata: Object<Metadata>,
+    collateral_remove_amount: u64,
+    is_long_position: bool
+)
+```
+
+Leverage calculation:
+```
+new_leverage = (leverage * old_collateral) / (old_collateral - removed_collateral)
+```
+
+### get_position
+
+Retrieves a position by user address, asset, collateral, and direction.
+
+```move
+public(friend) fun get_position(
+    user_addr: address,
+    asset_id: u64,
+    collateral_metadata: Object<Metadata>,
+    is_long_position: bool
+): Position
+```
+
+### get_position_by_id
+
+Retrieves a position by its unique ID.
+
+```move
+public(friend) fun get_position_by_id(
+    position_id: u64
+): Position
+```
+
+### update_tp_and_sl_price
+
+Updates take profit and stop loss prices for a position.
+
+```move
+public(friend) fun update_tp_and_sl_price(
+    user_addr: address,
+    asset_id: u64,
+    collateral_metadata: Object<Metadata>,
+    is_long_position: bool,
+    new_tp_price: BigDecimal,
+    new_sl_price: BigDecimal
+)
+```
+
+Validation rules:
+- For long positions: TP must be greater than SL (if both set)
+- For short positions: TP must be less than SL (if both set)
+- TP is automatically capped at max_pnl_ratio
+
+## Public Accessor Functions
+
+These functions provide read access to position fields:
+
+```move
+public fun user_addr(self: &Position): address
+public fun asset_id(self: &Position): u64
+public fun collateral_metadata(self: &Position): Object<Metadata>
+public fun margin_value(self: &Position): BigDecimal
+public fun leverage(self: &Position): BigDecimal
+public fun open_price(self: &Position): BigDecimal
+public fun tp_price(self: &Position): BigDecimal
+public fun sl_price(self: &Position): BigDecimal
+public fun collateral_amount(self: &Position): u64
+public fun size(self: &Position): BigDecimal
+public fun is_long_position(self: &Position): bool
+```
+
+### last_updated_fees
+
+Returns fee tracking data for a position.
+
+```move
+public fun last_updated_fees(
+    self: &Position
+): (SignedBigDecimal, SignedBigDecimal, SignedBigDecimal, SignedBigDecimal)
+```
+
+<ResponseField name="tuple" type="(SignedBigDecimal, SignedBigDecimal, SignedBigDecimal, SignedBigDecimal)">
+  Returns (last_updated_rollover_fee_per_oi, last_updated_funding_fee_per_oi, last_calculated_rollover_fee, last_calculated_funding_fee)
+</ResponseField>
+
+## PnL Calculations
+
+### current_pnl_by_price_changed
+
+Calculates unrealized PnL based on current price, capped at max_pnl_ratio.
+
+```move
+public fun current_pnl_by_price_changed(
+    self: &Position,
+    price: BigDecimal
+): (SignedBigDecimal, bool)
+```
+
+<ParamField path="self" type="&Position" required>
+  Position reference
+</ParamField>
+
+<ParamField path="price" type="BigDecimal" required>
+  Current market price
+</ParamField>
+
+<ResponseField name="pnl" type="SignedBigDecimal">
+  Unrealized PnL (capped at max if applicable)
+</ResponseField>
+
+<ResponseField name="is_max_pnl" type="bool">
+  True if PnL was capped at maximum
+</ResponseField>
+
+PnL calculation:
+```
+For long:  pnl = (price - open_price) * size
+For short: pnl = (open_price - price) * size
+
+max_pnl = (open_price * max_pnl_ratio / leverage) * size
+```
+
+### calc_leverage_after_remove_collateral
+
+Calculates what leverage would be after removing collateral.
+
+```move
+public(friend) fun calc_leverage_after_remove_collateral(
+    self: &Position,
+    collateral_remove_amount: u64
+): BigDecimal
+```
+
+<ParamField path="self" type="&Position" required>
+  Position reference
+</ParamField>
+
+<ParamField path="collateral_remove_amount" type="u64" required>
+  Amount of collateral to potentially remove
+</ParamField>
+
+<ResponseField name="leverage" type="BigDecimal">
+  Projected leverage after removal
+</ResponseField>
+
+## Position Merging
+
+When a user opens a new position in the same direction for the same asset-collateral pair:
+
+1. **Open Price**: Size-weighted average
+   ```
+   new_open_price = (old_open * old_size + new_open * new_size) / (old_size + new_size)
+   ```
+
+2. **Leverage**: Collateral-weighted average
+   ```
+   new_leverage = (old_lev * old_coll + new_lev * new_coll) / (old_coll + new_coll)
+   ```
+
+3. **Fees**: Accumulated and recalculated
+
+4. **TP/SL**: Updated to new values and auto-corrected if needed
+
+## Events
+
+The position module emits `PositionChangeEvent` for all state changes:
+
+```move
+#[event]
+struct PositionChangeEvent has copy, drop {
+    event_type: String,  // "create", "update", or "delete"
+    position_id: u64,
+    position_key: PositionKey,
+    position: Option<PositionResponse>  // None for delete events
+}
+```
+
+## Take Profit Auto-Correction
+
+To prevent excessive profits, TP prices are automatically capped:
+
+```
+max_tp_diff = open_price * max_pnl_ratio / leverage
+
+For long:  max_tp = open_price + max_tp_diff
+For short: max_tp = max(0, open_price - max_tp_diff)
+```
+
+This ensures PnL cannot exceed `max_pnl_ratio` times the initial margin.

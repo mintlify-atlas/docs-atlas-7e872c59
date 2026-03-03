@@ -1,0 +1,207 @@
+---
+title: Configuration
+description: Configure Move.toml and named addresses for deployment
+---
+
+## Move.toml Overview
+
+The `Move.toml` file is the package manifest that defines dependencies, addresses, and metadata for the Strat Perpetual DEX contracts.
+
+## Package Information
+
+```toml
+[package]
+name = "strat"
+version = "1.0.0"
+```
+
+- **name**: Package identifier used in module declarations
+- **version**: Semantic version for tracking releases
+
+## Named Addresses
+
+Named addresses are placeholders that must be replaced with actual blockchain addresses during deployment.
+
+### Production Addresses
+
+```toml
+[addresses]
+std = "0x1"
+strat = "_"
+vip_score = "_"
+point = "_"
+stork = "_"
+```
+
+<AccordionGroup>
+  <Accordion title="std (Standard Library)">
+    The standard library address is fixed at `0x1` on Initia. This should never be changed.
+  </Accordion>
+
+  <Accordion title="strat (Main Protocol)">
+    The primary deployment address for the Strat Perpetual DEX contracts. All core modules (gov, order, position, vault, etc.) are published under this address.
+
+    **Modules:**
+    - `strat::gov` - Governance and configuration
+    - `strat::order` - Order creation and management
+    - `strat::position` - Position tracking
+    - `strat::vault` - Collateral and LP management
+    - `strat::oracle_aggregator` - Price feed aggregation
+    - `strat::order_executor` - Keeper execution logic
+    - `strat::pair` - Trading pair configuration
+    - `strat::referral` - Referral tracking
+    - `strat::utils` - Utility functions
+    - `strat::signed_bigdecimal` - Signed decimal math
+  </Accordion>
+
+  <Accordion title="vip_score (VIP Scoring)">
+    Address for the VIP scoring system that tracks user tiers and benefits.
+
+    **Purpose:**
+    - Calculate user VIP levels based on activity
+    - Manage fee discounts and rewards
+    - Track trading volume and engagement
+  </Accordion>
+
+  <Accordion title="point (Points System)">
+    Address for the points/rewards system.
+
+    **Purpose:**
+    - Award points for trading activity
+    - Manage loyalty rewards
+    - Track user engagement metrics
+  </Accordion>
+
+  <Accordion title="stork (Oracle Integration)">
+    Address where the Stork oracle contracts are deployed.
+
+    **Purpose:**
+    - Provides real-time price feeds
+    - Supplies market status information
+    - Ensures reliable oracle data for trading
+  </Accordion>
+</AccordionGroup>
+
+### Development Addresses
+
+For testing and development, use the predefined dev addresses:
+
+```toml
+[dev-addresses]
+strat = "0x3"
+vip_score = "0x4"
+point = "0x5"
+stork = "0x6"
+```
+
+These addresses are automatically used when running tests with the `--dev` flag.
+
+## Building with Named Addresses
+
+### Development Build
+
+For local testing, use dev addresses:
+
+```bash
+initiad move build --dev
+```
+
+This automatically substitutes the `[dev-addresses]` values.
+
+### Production Build
+
+For mainnet deployment, specify actual addresses:
+
+<CodeGroup>
+```bash Inline Addresses
+initiad move build --named-addresses \
+  "strat=0xYOUR_STRAT_ADDRESS,vip_score=0xYOUR_VIP_ADDRESS,point=0xYOUR_POINT_ADDRESS,stork=0xYOUR_STORK_ADDRESS"
+```
+
+```bash Using Variables
+# Set environment variables
+export STRAT_ADDR=0xYOUR_STRAT_ADDRESS
+export VIP_ADDR=0xYOUR_VIP_ADDRESS
+export POINT_ADDR=0xYOUR_POINT_ADDRESS
+export STORK_ADDR=0xYOUR_STORK_ADDRESS
+
+# Build with variables
+initiad move build --named-addresses \
+  "strat=$STRAT_ADDR,vip_score=$VIP_ADDR,point=$POINT_ADDR,stork=$STORK_ADDR"
+```
+</CodeGroup>
+
+## Deployment Order
+
+<Warning>
+Deploy contracts in the correct order to satisfy dependencies:
+</Warning>
+
+<Steps>
+  <Step title="Deploy Supporting Contracts">
+    Deploy `vip_score`, `point`, and `stork` contracts first:
+
+    ```bash
+    # These are typically separate repositories
+    # Deploy them and note their addresses
+    ```
+  </Step>
+
+  <Step title="Update Move.toml or Use CLI Flags">
+    Option 1: Update `Move.toml` with deployed addresses:
+
+    ```toml
+    [addresses]
+    strat = "_"  # Still placeholder
+    vip_score = "0xDEPLOYED_VIP_ADDRESS"
+    point = "0xDEPLOYED_POINT_ADDRESS"
+    stork = "0xDEPLOYED_STORK_ADDRESS"
+    ```
+
+    Option 2: Keep placeholders and use `--named-addresses` flag
+  </Step>
+
+  <Step title="Deploy Strat Protocol">
+    Build and deploy the main protocol contracts:
+
+    ```bash
+    initiad move build --named-addresses \
+      "strat=0xYOUR_DEPLOYER_ADDRESS,vip_score=0x...,point=0x...,stork=0x..."
+
+    initiad move publish \
+      --from your-key \
+      --named-addresses "strat=0xYOUR_DEPLOYER_ADDRESS,..."
+    ```
+  </Step>
+</Steps>
+
+## Address Requirements
+
+<Card title="Important" icon="exclamation-triangle">
+  - All named addresses must be valid Initia addresses (32-byte hex with 0x prefix)
+  - The `strat` address must match your deployer account address
+  - Addresses in dependencies (`vip_score`, `point`, `stork`) must point to already-deployed contracts
+  - Mismatched addresses will cause module resolution errors
+</Card>
+
+## Verification
+
+After configuration, verify your setup:
+
+```bash
+# Check that Move.toml is valid
+initiad move build --dev
+
+# View resolved addresses
+initiad move build --named-addresses "strat=0x123..." --verbose
+```
+
+Successful builds indicate correct configuration.
+
+## Next Steps
+
+After configuring addresses:
+
+1. [Run tests](/deployment/testing) to verify functionality
+2. Execute deployment scripts with proper addresses
+3. Initialize governance and register trading pairs
